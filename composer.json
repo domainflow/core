@@ -1,0 +1,62 @@
+{
+  "name": "domainflow/core",
+  "description": "A lightweight PHP application bootstrapper with service providers, boot phases, middleware, and config management.",
+  "keywords": [
+    "framework", "application", "bootstrap", "service container", "dependency injection", "php", "microservice", "domainflow"
+  ],
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "DomainFlow",
+      "homepage": "https://www.domainflow.dev"
+    }
+  ],
+  "support": {
+    "issues": "https://github.com/domainflow/core/issues",
+    "source": "https://github.com/domainflow/core"
+  },
+  "require": {
+    "php": "^8.3||^8.4",
+    "domainflow/container": "^0.1.0"
+  },
+  "require-dev": {
+    "friendsofphp/php-cs-fixer": "^3.70",
+    "mikey179/vfsstream": "^1.6",
+    "nikic/php-parser": "^5.4",
+    "phpstan/phpstan": "^2.1",
+    "phpstan/phpstan-deprecation-rules": "^2.0",
+    "phpunit/phpunit": "^12.0",
+    "symfony/phpunit-bridge": "^7.2"
+  },
+  "autoload": {
+    "psr-4": {
+      "DomainFlow\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "DomainFlow\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "./vendor/bin/phpunit --testsuite=Unit -c phpunit.xml",
+    "test-integration": "./vendor/bin/phpunit --testsuite=Integration -c phpunit.xml",
+    "test-all": "./vendor/bin/phpunit -c phpunit.xml",
+    "code-coverage": [
+      "@putenv XDEBUG_MODE=coverage",
+      "./vendor/bin/phpunit -c phpunit.xml --testsuite=Unit --coverage-html=build/testcoverage"
+    ],
+    "phpstan": "./vendor/bin/phpstan analyse -c phpstan.neon",
+    "fix": [
+      "./vendor/bin/php-cs-fixer fix src tests --config=./php_cs.dist.php"
+    ]
+  },
+  "config": {
+    "preferred-install": "dist",
+    "sort-packages": true,
+    "optimize-autoloader": true
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true
+}
