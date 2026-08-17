@@ -119,7 +119,6 @@ trait BootstrappingTrait
             $this->applyAttributeRegistrations();
             $this->registerDefaultServiceProviders();
             $this->registerAndBootProviders();
-            $this->loadDeferredProviders();
             $this->runBootedCallbacks();
             $this->booted = true;
             $this->fireEvent(self::EVENT_BOOTED_KEY, $this);
