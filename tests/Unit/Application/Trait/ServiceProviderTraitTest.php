@@ -236,6 +236,23 @@ final class ServiceProviderTraitTest extends TestCase
     }
 
     /**
+     * @throws ContainerExceptionInterface|NotFoundExceptionInterface|Throwable
+     */
+    public function test_getPopulatesResolvedServicesCache(): void
+    {
+        $app = new Application();
+        $app->boot();
+
+        $this->assertArrayNotHasKey(ConsoleService::class, $app->getResolvedServicesCache());
+
+        $service = $app->get(ConsoleService::class);
+
+        $cache = $app->getResolvedServicesCache();
+        $this->assertArrayHasKey(ConsoleService::class, $cache);
+        $this->assertSame($service, $cache[ConsoleService::class]);
+    }
+
+    /**
      * @throws Throwable
      */
     public function test_hasProvider(): void
@@ -265,6 +282,12 @@ class DummyContainerServiceProvider
         string $id
     ): bool {
         return isset($this->services[$id]);
+    }
+
+    public function cacheResolvedService(
+        string $abstract,
+        mixed $instance
+    ): void {
     }
 }
 

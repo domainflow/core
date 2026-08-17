@@ -117,9 +117,13 @@ trait ServiceProviderTrait
     {
         foreach ($this->deferredServices as $serviceKey => $providerClass) {
             if (!$this->has($serviceKey)) {
-                /** @var ServiceProviderInterface $provider */
-                $provider = new $providerClass();
-                $this->registerProvider($provider);
+                if (!$this->hasProvider($providerClass)) {
+                    /** @var ServiceProviderInterface $provider */
+                    $provider = new $providerClass();
+                    $provider->register($this);
+                    $this->serviceProviders[$providerClass] = $provider;
+                    $this->fireEvent(self::EVENT_PROVIDER_REGISTERED_KEY, $providerClass);
+                }
 
                 $this->fireEvent(self::EVENT_PROVIDER_DEFERRED_LOADED_KEY, $serviceKey, $providerClass);
 
@@ -158,7 +162,15 @@ trait ServiceProviderTrait
             unset($this->deferredServices[$id]);
         }
 
-        return parent::get($id);
+        $value = parent::get($id);
+
+        // domainflow/container no longer caches resolved services as a side
+        // effect of make()/get(); Application still exposes a persistable
+        // resolved-services snapshot, so it must populate it explicitly.
+        // @phpstan-ignore method.deprecated
+        $this->cacheResolvedService($id, $value);
+
+        return $value;
     }
 
     /**

@@ -18,7 +18,7 @@
   },
   "require": {
     "php": "^8.4",
-    "domainflow/container": "^0.1.0",
+    "domainflow/container": "^0.2.0",
     "symfony/yaml": "^7.4.12 || ^8.0.12"
   },
   "require-dev": {
