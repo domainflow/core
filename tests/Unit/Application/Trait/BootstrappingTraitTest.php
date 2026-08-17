@@ -13,8 +13,6 @@ use DomainFlow\ServiceProvider\EventDispatcherServiceProvider;
 use Exception;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
-use ReflectionClass;
-use ReflectionException;
 use Throwable;
 
 #[CoversClass(Application::class)]
@@ -208,22 +206,21 @@ final class BootstrappingTraitTest extends TestCase
     }
 
     /**
-     * @throws ReflectionException|Throwable
+     * @throws Throwable
      */
     public function test_boot_sets_instance_if_not_already_set(): void
     {
-        // Reset static container instance map to avoid LogicException
-        $ref = new ReflectionClass(Application::class);
-        $prop = $ref->getParentClass()->getProperty('container_instances');
-
-        $prop->setValue(null, []);
-
-        $app = new DummyApplication();
+        // An anonymous subclass gives this test a unique static::class key
+        // in Container's static $container_instances map, so it cannot
+        // collide with another test that has already booted DummyApplication
+        // (which would make setInstance() throw LogicException).
+        $app = new class() extends DummyApplication {
+        };
 
         $app->boot();
 
-        $this->assertSame(DummyApplication::class, get_class(DummyApplication::getInstance()));
-        $this->assertSame($app, DummyApplication::getInstance());
+        $this->assertSame(get_class($app), get_class($app::getInstance()));
+        $this->assertSame($app, $app::getInstance());
     }
 
 }

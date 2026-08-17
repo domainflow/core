@@ -8,7 +8,10 @@ use DomainFlow\Application;
 use DomainFlow\Application\Attributes\EventListener;
 use DomainFlow\Application\Attributes\Inject;
 use DomainFlow\Application\Attributes\Service;
-use DomainFlow\Application\Traits\AttributeRegistrarTrait;
+use DomainFlow\Application\Class\BasicEventDispatcher;
+use DomainFlow\Application\Class\SystemEventStore;
+use DomainFlow\Application\Exception\EventManagerException;
+use DomainFlow\Application\Exception\PathEnvironmentException;
 use DomainFlow\Container\Exception\ContainerException;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
@@ -22,36 +25,35 @@ use Throwable;
 #[CoversClass(EventListener::class)]
 #[CoversClass(Inject::class)]
 #[CoversClass(Service::class)]
+#[CoversClass(BasicEventDispatcher::class)]
+#[CoversClass(SystemEventStore::class)]
 final class AttributeRegistrarTraitTest extends TestCase
 {
-    private DummyEventDispatcher $dummyDispatcher;
+    private Application $app;
 
+    /**
+     * @throws EventManagerException|PathEnvironmentException
+     */
     protected function setUp(): void
     {
-        $this->dummyDispatcher = new DummyEventDispatcher();
+        $this->app = new Application();
     }
 
     /**
-     * @throws ContainerException
+     * @throws ContainerException|NotFoundExceptionInterface|ContainerExceptionInterface|Throwable
      */
     public function test_autoRegisterServices_withServiceAttribute(): void
     {
-        $container = new DummyContainer($this->dummyDispatcher);
-        $container->bindingsRecords = [];
-
-        $container->autoRegisterServices([
+        $this->app->autoRegisterServices([
             DummyServiceWithAttribute::class,
         ]);
 
-        $this->assertArrayHasKey('custom_service', $container->bindingsRecords);
+        $this->assertTrue($this->app->has('custom_service'));
 
-        $record = $container->bindingsRecords['custom_service'];
-
-        $this->assertTrue($record['shared']);
-
-        $serviceInstance = ($record['closure'])();
+        $serviceInstance = $this->app->get('custom_service');
 
         $this->assertInstanceOf(DummyServiceWithAttribute::class, $serviceInstance);
+        $this->assertSame($serviceInstance, $this->app->get('custom_service'), 'Service attribute declared shared: true.');
     }
 
     /**
@@ -59,36 +61,27 @@ final class AttributeRegistrarTraitTest extends TestCase
      */
     public function test_autoRegisterServices_withoutServiceAttribute(): void
     {
-        $container = new DummyContainer($this->dummyDispatcher);
-        $container->bindingsRecords = [];
-
-        $container->autoRegisterServices([
+        $this->app->autoRegisterServices([
             DummyServiceWithoutAttribute::class,
         ]);
 
-        $this->assertEmpty($container->bindingsRecords);
+        $this->assertFalse($this->app->has(DummyServiceWithoutAttribute::class));
     }
 
+    /**
+     * @throws EventManagerException
+     */
     public function test_autoRegisterEventListeners(): void
     {
-        $container = new DummyContainer($this->dummyDispatcher);
         $listener = new DummyListenerAttributeRegistrarTrait();
 
-        $container->autoRegisterEventListeners([$listener]);
+        $this->app->autoRegisterEventListeners([$listener]);
 
-        $this->assertArrayHasKey('dummy.event', $this->dummyDispatcher->listeners);
+        $this->assertTrue($this->app->hasListeners('dummy.event'));
 
-        $callbacks = $this->dummyDispatcher->listeners['dummy.event'];
+        $this->app->fireEvent('dummy.event');
 
-        $found = false;
-        foreach ($callbacks as $callback) {
-            if ($callback === [$listener, 'onDummyEvent']) {
-                $found = true;
-                break;
-            }
-        }
-
-        $this->assertTrue($found, "Expected listener callback not found");
+        $this->assertTrue($listener->called, 'Registered listener was not invoked by the dispatched event.');
     }
 
     /**
@@ -96,8 +89,7 @@ final class AttributeRegistrarTraitTest extends TestCase
      */
     public function test_resolveDependencies_withoutConstructor(): void
     {
-        $container = new DummyContainer($this->dummyDispatcher);
-        $instance = $container->resolveDependencies(DummyNoConstructor::class);
+        $instance = $this->app->resolveDependencies(DummyNoConstructor::class);
 
         $this->assertInstanceOf(DummyNoConstructor::class, $instance);
     }
@@ -107,11 +99,10 @@ final class AttributeRegistrarTraitTest extends TestCase
      */
     public function test_resolveDependencies_withDependency_withoutInject(): void
     {
-        $container = new DummyContainer($this->dummyDispatcher);
         $dummyDependency = new DummyDependency();
-        $container->getBindings[DummyDependency::class] = $dummyDependency;
+        $this->app->instance(DummyDependency::class, $dummyDependency);
 
-        $instance = $container->resolveDependencies(DummyWithDependency::class);
+        $instance = $this->app->resolveDependencies(DummyWithDependency::class);
 
         $this->assertInstanceOf(DummyWithDependency::class, $instance);
         $this->assertSame($dummyDependency, $instance->dependency);
@@ -122,11 +113,10 @@ final class AttributeRegistrarTraitTest extends TestCase
      */
     public function test_resolveDependencies_withInjectedDependency(): void
     {
-        $container = new DummyContainer($this->dummyDispatcher);
         $dummyDependency = new DummyDependency();
-        $container->getBindings['custom_dependency'] = $dummyDependency;
+        $this->app->instance('custom_dependency', $dummyDependency);
 
-        $instance = $container->resolveDependencies(DummyWithInjectedDependency::class);
+        $instance = $this->app->resolveDependencies(DummyWithInjectedDependency::class);
 
         $this->assertInstanceOf(DummyWithInjectedDependency::class, $instance);
         $this->assertSame($dummyDependency, $instance->dependency);
@@ -140,68 +130,11 @@ final class AttributeRegistrarTraitTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('No valid type specified for parameter param');
 
-        $container = new DummyContainer($this->dummyDispatcher);
-
-        $container->resolveDependencies(DummyWithoutType::class);
+        $this->app->resolveDependencies(DummyWithoutType::class);
     }
 }
 
 # Dummy classes
-class DummyEventDispatcher
-{
-    public array $listeners = [];
-
-    public function on(
-        string $event,
-        callable $callback
-    ): void {
-        if (!isset($this->listeners[$event])) {
-            $this->listeners[$event] = [];
-        }
-        $this->listeners[$event][] = $callback;
-    }
-}
-
-class DummyContainer
-{
-    use AttributeRegistrarTrait;
-
-    /** @var array<string, array{closure: callable, shared: bool}> */
-    public array $bindingsRecords = [];
-    /** @var array<string, mixed> */
-    public array $getBindings = [];
-    public DummyEventDispatcher $eventDispatcher;
-
-    public function __construct(
-        DummyEventDispatcher $dispatcher
-    ) {
-        $this->eventDispatcher = $dispatcher;
-    }
-
-    public function bind(
-        string $name,
-        callable $closure,
-        bool $shared
-    ): void {
-        $this->bindingsRecords[$name] = [
-            'closure' => $closure,
-            'shared' => $shared,
-        ];
-    }
-
-    public function get(
-        string $id
-    ) {
-        if (isset($this->getBindings[$id])) {
-            return $this->getBindings[$id];
-        }
-        if (isset($this->bindingsRecords[$id])) {
-            return ($this->bindingsRecords[$id]['closure'])();
-        }
-        throw new RuntimeException("No binding for {$id}");
-    }
-}
-
 #[Service(name: 'custom_service', shared: true)]
 class DummyServiceWithAttribute
 {
@@ -209,17 +142,6 @@ class DummyServiceWithAttribute
 
 class DummyServiceWithoutAttribute
 {
-}
-
-class DummyListener
-{
-    public bool $called = false;
-
-    #[EventListener('dummy.event')]
-    public function onDummyEvent(): void
-    {
-        $this->called = true;
-    }
 }
 
 class DummyNoConstructor

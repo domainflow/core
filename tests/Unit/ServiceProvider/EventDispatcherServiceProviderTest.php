@@ -15,7 +15,6 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerExceptionInterface;
 use Psr\Container\NotFoundExceptionInterface;
-use ReflectionClass;
 
 #[CoversClass(EventDispatcherServiceProvider::class)]
 #[CoversClass(Application::class)]
@@ -23,14 +22,6 @@ use ReflectionClass;
 #[CoversClass(SystemEventStore::class)]
 class EventDispatcherServiceProviderTest extends TestCase
 {
-    private function getEventDispatcher(Application $app): ?object
-    {
-        $reflection = new ReflectionClass($app);
-        $property = $reflection->getProperty('eventDispatcher');
-
-        return $property->getValue($app);
-    }
-
     /**
      * @throws EventManagerException|PathEnvironmentException
      */
@@ -43,7 +34,7 @@ class EventDispatcherServiceProviderTest extends TestCase
         $app->setEventDispatcher($dummyDispatcher);
 
         $provider->register($app);
-        $newDispatcher = $this->getEventDispatcher($app);
+        $newDispatcher = $app->getEventDispatcher();
 
         $this->assertInstanceOf(BasicEventDispatcher::class, $newDispatcher);
         $this->assertSame($dummyDispatcher, $newDispatcher);
@@ -74,10 +65,10 @@ class EventDispatcherServiceProviderTest extends TestCase
         $provider = new EventDispatcherServiceProvider();
 
         $provider->register($app);
-        $dispatcherBeforeBoot = $this->getEventDispatcher($app);
+        $dispatcherBeforeBoot = $app->getEventDispatcher();
 
         $provider->boot($app);
-        $dispatcherAfterBoot = $this->getEventDispatcher($app);
+        $dispatcherAfterBoot = $app->getEventDispatcher();
 
         $this->assertSame($dispatcherBeforeBoot, $dispatcherAfterBoot);
     }

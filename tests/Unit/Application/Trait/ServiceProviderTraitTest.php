@@ -8,8 +8,6 @@ use DomainFlow\Application;
 use DomainFlow\Application\Class\BasicEventDispatcher;
 use DomainFlow\Application\Class\SystemEventStore;
 use DomainFlow\Application\Exception\BootstrappingException;
-use DomainFlow\Application\Exception\EventManagerException;
-use DomainFlow\Application\Traits\ServiceProviderTrait;
 use DomainFlow\Service\AbstractServiceProvider;
 use DomainFlow\Service\ServiceProviderInterface;
 use DomainFlow\ServiceProvider\EventDispatcherServiceProvider;
@@ -33,30 +31,21 @@ final class ServiceProviderTraitTest extends TestCase
      */
     public function test_registerProviderRegistersAndFiresEvent(): void
     {
-        $container = new DummyServiceProviderContainerServiceProvider();
+        $app = new Application();
         $provider = new DummyProvider(['service1']);
         $provider->defer = true;
-
-        $container->registerProvider($provider);
         $class = get_class($provider);
 
-        $this->assertArrayHasKey('service1', $container->getDeferredServices());
-        $this->assertArrayNotHasKey($class, $container->getProviders());
+        $app->registerProvider($provider);
 
-        $value = $container->get('service1');
+        $this->assertFalse($app->has('service1'), 'A deferred service is not bound until requested.');
+        $this->assertFalse($app->hasProvider($class));
 
-        $this->assertArrayHasKey($class, $container->getProviders());
-        $this->assertEquals("default_service1", $value);
+        $value = $app->get('service1');
 
-        $found = false;
-        foreach ($container->events as $event) {
-            if ($event['event'] === 'service_provider.deferred.loaded' && $event['args'][0] === 'service1') {
-                $found = true;
-                break;
-            }
-        }
-        $this->assertTrue($found, "Deferred provider loaded event not fired.");
-
+        $this->assertTrue($app->hasProvider($class));
+        $this->assertEquals('default_service1', $value);
+        $this->assertEventFiredWithArgs($app, 'service_provider.deferred.loaded', ['service1', $class]);
     }
 
     /**
@@ -64,27 +53,18 @@ final class ServiceProviderTraitTest extends TestCase
      */
     public function test_registerProviderRegistersAndFiresEvent_nonDefer(): void
     {
-        $container = new DummyServiceProviderContainerServiceProvider();
+        $app = new Application();
         $provider = new DummyProvider(['service1']);
-
-        $container->registerProvider($provider);
         $class = get_class($provider);
 
-        $this->assertArrayHasKey($class, $container->getProviders());
+        $app->registerProvider($provider);
 
-        $value = $container->get('service1');
-        $this->assertEquals("default_service1", $value);
+        $this->assertTrue($app->hasProvider($class));
 
-        $found = false;
-        foreach ($container->events as $event) {
-            if ($event['event'] === 'service_provider.registered' && $event['args'][0] === $class) {
-                $found = true;
-                break;
-            }
-        }
-        $this->assertTrue($found, "Provider registered event not fired.");
+        $value = $app->get('service1');
+        $this->assertEquals('default_service1', $value);
 
-        $this->assertArrayHasKey($class, $container->getProviders());
+        $this->assertEventFiredWithArgs($app, 'service_provider.registered', [$class]);
     }
 
     /**
@@ -92,14 +72,14 @@ final class ServiceProviderTraitTest extends TestCase
      */
     public function test_registerProviderDoesNotRegisterTwice(): void
     {
-        $container = new DummyServiceProviderContainerServiceProvider();
+        $app = new Application();
         $provider = new DummyProvider(['service1']);
 
-        $container->registerProvider($provider);
-        $container->registerProvider($provider);
+        $app->registerProvider($provider);
+        $app->registerProvider($provider);
 
-        $this->assertCount(1, $container->getProviders());
-        $this->assertCount(0, $container->getDeferredServices());
+        $this->assertCount(1, $app->getProviders());
+        $this->assertSame(1, $provider->registerCallCount, 'A provider class must not register twice.');
     }
 
     /**
@@ -107,77 +87,49 @@ final class ServiceProviderTraitTest extends TestCase
      */
     public function test_registerProviderBootsIfAlreadyBooted(): void
     {
-        $container = new DummyServiceProviderContainerServiceProvider();
-        $container->booted = true;
+        $app = new Application();
+        $app->boot();
         $provider = new DummyProvider(['service2']);
 
-        $container->registerProvider($provider);
+        $app->registerProvider($provider);
 
         $this->assertTrue($provider->bootedCalled);
     }
 
     /**
-     * @throws EventManagerException|Throwable
+     * @throws Throwable
      */
-    public function test_unregisterProviderRemovesProviderAndDeferredServices(): void
+    public function test_unregisterProviderRemovesProvider(): void
     {
-        $container = new DummyServiceProviderContainerServiceProvider();
+        $app = new Application();
         $provider = new DummyProvider(['service3', 'service4']);
         $provider->defer = true;
         $class = get_class($provider);
-        $container->registerProvider($provider);
+        $app->registerProvider($provider);
 
-        $this->assertArrayHasKey('service3', $container->getDeferredServices());
-        $this->assertArrayHasKey('service4', $container->getDeferredServices());
+        $app->unregisterProvider($class);
 
-        $container->unregisterProvider($class);
-
-        $this->assertFalse(isset($container->getProviders()[$class]));
-        $this->assertFalse(isset($container->getDeferredServices()['service3']));
-        $this->assertFalse(isset($container->getDeferredServices()['service4']));
-
-        $found = false;
-        foreach ($container->events as $event) {
-            if ($event['event'] === 'service_provider.unregistered'
-                && $event['args'][0] === $class) {
-                $found = true;
-                break;
-            }
-        }
-
-        $this->assertTrue($found, "Provider unregistered event not fired.");
-    }
-
-    /**
-     * @throws EventManagerException|Throwable
-     */
-    public function test_unregisterProviderRemovesProviderAndDeferredServicesCompletely(): void
-    {
-        $container = new DummyServiceProviderContainerServiceProvider();
-        $provider = new DummyProvider(['service9', 'service10']);
-        $provider->defer = false;
-        $providerClass = get_class($provider);
-
-        $container->registerProvider($provider);
-
-        $this->assertArrayHasKey($providerClass, $container->getProviders());
-
-        $container->unregisterProvider($providerClass);
-
-        $this->assertArrayNotHasKey($providerClass, $container->getProviders());
+        $this->assertFalse($app->hasProvider($class));
+        $this->assertEventFiredWithArgs($app, 'service_provider.unregistered', [$class]);
     }
 
     /**
      * @throws Throwable
      */
-    public function test_getProvidersReturnsProviders(): void
+    public function test_unregisterProviderRemovesProviderAndDeferredServicesCompletely(): void
     {
-        $container = new DummyServiceProviderContainerServiceProvider();
-        $provider = $this->createStub(DummyProvider::class);
-        $container->registerProvider($provider);
-        $providers = $container->getProviders();
+        $app = new Application();
+        $provider = new DummyProvider(['service9', 'service10']);
+        $provider->defer = false;
+        $providerClass = get_class($provider);
 
-        $this->assertArrayHasKey(get_class($provider), $providers);
+        $app->registerProvider($provider);
+
+        $this->assertTrue($app->hasProvider($providerClass));
+
+        $app->unregisterProvider($providerClass);
+
+        $this->assertFalse($app->hasProvider($providerClass));
     }
 
     /**
@@ -185,11 +137,11 @@ final class ServiceProviderTraitTest extends TestCase
      */
     public function test_getProviders(): void
     {
-        $container = new Application();
+        $app = new Application();
         $provider = $this->createStub(DummyProvider::class);
-        $container->registerProvider($provider);
+        $app->registerProvider($provider);
 
-        $providers = $container->getProviders();
+        $providers = $app->getProviders();
         $this->assertArrayHasKey(get_class($provider), $providers);
     }
 
@@ -312,12 +264,12 @@ final class ServiceProviderTraitTest extends TestCase
      */
     public function test_hasProvider(): void
     {
-        $container = new DummyServiceProviderContainerServiceProvider();
+        $app = new Application();
         $provider = new DummyProvider(['service8']);
         $class = get_class($provider);
-        $this->assertFalse($container->hasProvider($class));
-        $container->registerProvider($provider);
-        $this->assertTrue($container->hasProvider($class));
+        $this->assertFalse($app->hasProvider($class));
+        $app->registerProvider($provider);
+        $this->assertTrue($app->hasProvider($class));
     }
 
     /**
@@ -325,11 +277,11 @@ final class ServiceProviderTraitTest extends TestCase
      */
     public function test_registerProvider_deferredIdentifierCollision_throwsAndPreservesFirstClaim(): void
     {
-        $container = new DummyServiceProviderContainerServiceProvider();
+        $app = new Application();
         $first = new DummyProvider(['shared.service'], true);
         $second = new SecondDummyProvider(['shared.service'], true);
 
-        $container->registerProvider($first);
+        $app->registerProvider($first);
 
         $this->expectException(BootstrappingException::class);
         $this->expectExceptionMessage(sprintf(
@@ -339,13 +291,17 @@ final class ServiceProviderTraitTest extends TestCase
         ));
 
         try {
-            $container->registerProvider($second);
+            $app->registerProvider($second);
         } finally {
+            $value = $app->get('shared.service');
+
             $this->assertSame(
-                get_class($first),
-                $container->getDeferredServices()['shared.service'],
+                'default_shared.service',
+                $value,
                 'The first claiming provider must remain the owner of the identifier after a rejected collision.'
             );
+            $this->assertSame(1, $first->registerCallCount);
+            $this->assertFalse($app->hasProvider(get_class($second)));
         }
     }
 
@@ -354,13 +310,16 @@ final class ServiceProviderTraitTest extends TestCase
      */
     public function test_registerProvider_sameDeferredProviderClassTwice_isNotACollision(): void
     {
-        $container = new DummyServiceProviderContainerServiceProvider();
+        $app = new Application();
         $provider = new DummyProvider(['service1'], true);
 
-        $container->registerProvider($provider);
-        $container->registerProvider($provider);
+        $app->registerProvider($provider);
+        $app->registerProvider($provider);
 
-        $this->assertArrayHasKey('service1', $container->getDeferredServices());
+        $value = $app->get('service1');
+
+        $this->assertSame('default_service1', $value);
+        $this->assertSame(1, $provider->registerCallCount);
     }
 
     /**
@@ -411,17 +370,22 @@ final class ServiceProviderTraitTest extends TestCase
      */
     public function test_unregisterProvider_freesClaimedDeferredIdentifierForReuse(): void
     {
-        $container = new DummyServiceProviderContainerServiceProvider();
+        $app = new Application();
         $first = new DummyProvider(['reusable.service'], true);
         $second = new DummyProvider(['reusable.service'], true);
 
-        $container->registerProvider($first);
-        $container->unregisterProvider(get_class($first));
+        $app->registerProvider($first);
+        $app->unregisterProvider(get_class($first));
 
-        $container->registerProvider($second);
+        // Would throw BootstrappingException::forDeferredServiceIdentifierCollision()
+        // if the identifier claim had not been released by unregisterProvider().
+        $app->registerProvider($second);
 
-        $this->assertSame('reusable.service', array_key_first($container->getDeferredServices()));
-        $this->assertSame(get_class($second), $container->getDeferredServices()['reusable.service']);
+        $value = $app->get('reusable.service');
+
+        $this->assertSame('default_reusable.service', $value);
+        $this->assertSame(1, $second->registerCallCount);
+        $this->assertSame(0, $first->registerCallCount);
     }
 
     /**
@@ -434,9 +398,9 @@ final class ServiceProviderTraitTest extends TestCase
         // falling out of sync (an internal invariant violation) to prove
         // resolution fails loudly instead of silently instantiating a
         // fresh, dependency-less provider.
-        $container = new DummyServiceProviderContainerServiceProvider();
-        $ref = new ReflectionClass($container);
-        $ref->getProperty('deferredServices')->setValue($container, ['service.orphaned' => DummyProvider::class]);
+        $app = new Application();
+        $ref = new ReflectionClass($app);
+        $ref->getProperty('deferredServices')->setValue($app, ['service.orphaned' => DummyProvider::class]);
 
         $this->expectException(BootstrappingException::class);
         $this->expectExceptionMessage(
@@ -444,7 +408,7 @@ final class ServiceProviderTraitTest extends TestCase
             . 'while resolving service [service.orphaned].'
         );
 
-        $container->get('service.orphaned');
+        $app->get('service.orphaned');
     }
 
     /**
@@ -454,26 +418,30 @@ final class ServiceProviderTraitTest extends TestCase
     {
         $provider = new DummyProvider(['service6'], true);
 
-        $container = new DummyServiceProviderContainerServiceProvider();
-        $container->registerProvider($provider);
+        $app = new Application();
+        $app->registerProvider($provider);
 
-        $container->loadDeferredProviders();
+        $app->loadDeferredProviders();
 
-        $this->assertFalse(isset($container->getDeferredServices()['service6']));
+        $this->assertTrue($app->has('service6'));
         $this->assertSame(1, $provider->registerCallCount);
+        $this->assertEventFiredWithArgs($app, 'service_provider.deferred.loaded', ['service6', get_class($provider)]);
+    }
 
-        $found = false;
-        foreach ($container->events as $event) {
-            if (
-                $event['event'] === 'service_provider.deferred.loaded'
-                && $event['args'][0] === 'service6'
-                && $event['args'][1] === get_class($provider)
-            ) {
-                $found = true;
-                break;
+    /**
+     * @param array<int, mixed> $expectedArgs
+     */
+    private function assertEventFiredWithArgs(
+        Application $app,
+        string $event,
+        array $expectedArgs
+    ): void {
+        foreach ($app->getEvents()[$event] ?? [] as $entry) {
+            if ($entry['args'] === $expectedArgs) {
+                return;
             }
         }
-        $this->assertTrue($found, "Deferred provider loaded event not fired.");
+        $this->fail(sprintf('Event [%s] with the expected arguments was not fired.', $event));
     }
 }
 
@@ -512,63 +480,12 @@ final class ConstructorDependentDeferredProvider extends AbstractServiceProvider
 }
 
 # Dummy classes
-class DummyContainerServiceProvider
-{
-    /** @var array<string, string> */
-    public array $services = [];
-
-    public function get(
-        string $id
-    ): mixed {
-        return $this->services[$id] ?? "default_$id";
-    }
-
-    public function has(
-        string $id
-    ): bool {
-        return isset($this->services[$id]);
-    }
-}
-
-class DummyServiceProviderContainerServiceProvider extends DummyContainerServiceProvider
-{
-    use ServiceProviderTrait;
-
-    public bool $booted = false;
-    public array $events = [];
-
-    protected function fireEvent(
-        string $event,
-        ...$args
-    ): void {
-        $this->events[] = ['event' => $event, 'args' => $args];
-    }
-
-    public function getProviders(): array
-    {
-        return $this->serviceProviders;
-    }
-
-    public function &getDeferredServices(): array
-    {
-        return $this->deferredServices;
-    }
-
-    public function registerService(
-        string $service,
-        ServiceProviderInterface $provider
-    ): void {
-        $this->services[$service] = "default_$service";
-    }
-}
-
 class DummyProvider implements ServiceProviderInterface
 {
     public bool $registered = false;
     public bool $bootedCalled = false;
     public int $registerCallCount = 0;
     public int $bootCallCount = 0;
-    public bool $throwOnRegister = false;
     private array $provides;
     public bool $defer = false;
 
@@ -581,27 +498,18 @@ class DummyProvider implements ServiceProviderInterface
     }
 
     public function register(
-        $app
+        Application $app
     ): void {
         $this->registerCallCount++;
-
-        if ($this->throwOnRegister) {
-            throw new RuntimeException('Simulated provider registration failure');
-        }
-
         $this->registered = true;
 
         foreach ($this->provides as $service) {
-            if (method_exists($app, 'bind')) {
-                $app->bind($service, fn () => "default_$service");
-            } else {
-                $app->services[$service] = "default_$service";
-            }
+            $app->bind($service, fn () => "default_$service");
         }
     }
 
     public function boot(
-        $app
+        Application $app
     ): void {
         $this->bootCallCount++;
         $this->bootedCalled = true;
@@ -632,12 +540,12 @@ class SecondDummyProvider implements ServiceProviderInterface
     }
 
     public function register(
-        $app
+        Application $app
     ): void {
     }
 
     public function boot(
-        $app
+        Application $app
     ): void {
     }
 
@@ -657,28 +565,6 @@ class ConsoleService
     public function sayHello(): string
     {
         return 'Hello from ConsoleService!';
-    }
-}
-
-class ConsoleServiceProvider extends AbstractServiceProvider
-{
-    protected array $providedServices = [ConsoleService::class];
-    public bool $defer = true;
-    public function register(
-        Application $app
-    ): void {
-        $app->bind(ConsoleService::class, fn () => new ConsoleService(), true);
-    }
-
-    public function boot(
-        Application $app
-    ): void {
-        echo "ConsoleServiceProvider booted.\n";
-    }
-
-    public function isDeferred(): bool
-    {
-        return $this->defer;
     }
 }
 

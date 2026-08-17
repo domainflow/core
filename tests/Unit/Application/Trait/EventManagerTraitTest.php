@@ -5,27 +5,29 @@ declare(strict_types=1);
 namespace DomainFlow\Tests\Unit\Application\Trait;
 
 use DomainFlow\Application;
+use DomainFlow\Application\Class\BasicEventDispatcher;
+use DomainFlow\Application\Class\SystemEventStore;
 use DomainFlow\Application\Exception\EventManagerException;
+use DomainFlow\Application\Exception\PathEnvironmentException;
 use DomainFlow\Application\Interface\EventDispatcherInterface;
 use DomainFlow\Application\Interface\SystemEventStoreInterface;
-use DomainFlow\Application\Traits\EventManagerTrait;
 use Exception;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
-use ReflectionClass;
 
 #[CoversClass(Application::class)]
 #[CoversClass(EventManagerException::class)]
+#[CoversClass(SystemEventStore::class)]
+#[CoversClass(BasicEventDispatcher::class)]
 final class EventManagerTraitTest extends TestCase
 {
     /**
-     * @throws EventManagerException
+     * @throws EventManagerException|PathEnvironmentException
      */
     public function test_setEventDispatcher(): void
     {
         $dummyDispatcher = new TestDummyEventDispatcher();
-        $manager = new DummyEventManager();
-        $manager->setEventDispatcher($dummyDispatcher);
+        $app = new Application(eventDispatcher: $dummyDispatcher);
 
         $this->assertCount(1, $dummyDispatcher->dispatchedEvents);
 
@@ -36,78 +38,73 @@ final class EventManagerTraitTest extends TestCase
     }
 
     /**
-     * @throws EventManagerException
+     * @throws EventManagerException|PathEnvironmentException
      */
     public function test_getEventDispatcher(): void
     {
         $dummyDispatcher = new TestDummyEventDispatcher();
-        $manager = new DummyEventManager();
-        $manager->setEventDispatcher($dummyDispatcher);
+        $app = new Application(eventDispatcher: $dummyDispatcher);
 
-        $this->assertSame($dummyDispatcher, $manager->getEventDispatcher());
+        $this->assertSame($dummyDispatcher, $app->getEventDispatcher());
     }
 
     /**
-     * @throws EventManagerException
+     * @throws EventManagerException|PathEnvironmentException
      */
     public function test_on_method(): void
     {
         $dummyDispatcher = new TestDummyEventDispatcher();
-        $manager = new DummyEventManager();
-        $manager->setEventDispatcher($dummyDispatcher);
+        $app = new Application(eventDispatcher: $dummyDispatcher);
 
         $listener = function () {
         };
-        $manager->on('test.event', $listener);
+        $app->on('test.event', $listener);
 
         $this->assertArrayHasKey('test.event', $dummyDispatcher->listeners);
         $this->assertSame($listener, $dummyDispatcher->listeners['test.event'][0]);
     }
 
     /**
-     * @throws EventManagerException
+     * @throws EventManagerException|PathEnvironmentException
      */
     public function test_once_method(): void
     {
         $dummyDispatcher = new TestDummyEventDispatcher();
-        $manager = new DummyEventManager();
-        $manager->setEventDispatcher($dummyDispatcher);
+        $app = new Application(eventDispatcher: $dummyDispatcher);
 
         $listener = function () {
         };
-        $manager->once('once.event', $listener);
+        $app->once('once.event', $listener);
 
         $this->assertArrayHasKey('once.event', $dummyDispatcher->listeners);
         $this->assertCount(1, $dummyDispatcher->listeners['once.event']);
     }
 
     /**
-     * @throws EventManagerException
+     * @throws EventManagerException|PathEnvironmentException
      */
     public function test_off_method(): void
     {
         $dummyDispatcher = new TestDummyEventDispatcher();
-        $manager = new DummyEventManager();
-        $manager->setEventDispatcher($dummyDispatcher);
+        $app = new Application(eventDispatcher: $dummyDispatcher);
 
         $listener = function () {
         };
-        $manager->on('off.event', $listener);
-        $manager->off('off.event', $listener);
+        $app->on('off.event', $listener);
+        $app->off('off.event', $listener);
 
         $this->assertArrayNotHasKey('off.event', $dummyDispatcher->listeners);
     }
 
     /**
-     * @throws EventManagerException
+     * @throws EventManagerException|PathEnvironmentException
      */
     public function test_fireEvent_normal(): void
     {
         $dummyDispatcher = new TestDummyEventDispatcher();
-        $manager = new DummyEventManager();
-        $manager->setEventDispatcher($dummyDispatcher);
+        $app = new Application(eventDispatcher: $dummyDispatcher);
 
-        $manager->fireEvent('normal.event', 'arg1', 'arg2');
+        $app->fireEvent('normal.event', 'arg1', 'arg2');
         $this->assertCount(2, $dummyDispatcher->dispatchedEvents);
 
         $eventRecord = $dummyDispatcher->dispatchedEvents[1];
@@ -117,7 +114,7 @@ final class EventManagerTraitTest extends TestCase
     }
 
     /**
-     * @throws EventManagerException
+     * @throws EventManagerException|PathEnvironmentException
      */
     public function test_fireEvent_exception(): void
     {
@@ -125,7 +122,6 @@ final class EventManagerTraitTest extends TestCase
             public array $listeners = [];
             public array $dispatchedEvents = [];
             public array $dispatchedErrorEvents = [];
-            public bool $throwOnDispatch = true;
 
             public function on(
                 string $event,
@@ -164,7 +160,7 @@ final class EventManagerTraitTest extends TestCase
                 string $event,
                 mixed ...$args
             ): void {
-                if ($event !== 'event_manager.dispatcher.set' && $event !== 'event_manager.dispatch.error' && $this->throwOnDispatch) {
+                if ($event !== 'event_manager.dispatcher.set' && $event !== 'event_manager.dispatch.error') {
                     throw new Exception("Simulated dispatch error");
                 }
                 $record = [
@@ -193,12 +189,11 @@ final class EventManagerTraitTest extends TestCase
             }
         };
 
-        $manager = new DummyEventManager();
-        $manager->setEventDispatcher($dummyDispatcher);
+        $app = new Application(eventDispatcher: $dummyDispatcher);
 
         $this->expectException(EventManagerException::class);
         try {
-            $manager->fireEvent('error.event', 'data');
+            $app->fireEvent('error.event', 'data');
         } catch (EventManagerException $e) {
             $this->assertArrayHasKey('event_manager.dispatch.error', $dummyDispatcher->dispatchedErrorEvents);
 
@@ -212,56 +207,46 @@ final class EventManagerTraitTest extends TestCase
     }
 
     /**
-     * @throws EventManagerException
+     * @throws EventManagerException|PathEnvironmentException
      */
     public function test_hasListeners(): void
     {
         $dummyDispatcher = new TestDummyEventDispatcher();
-        $manager = new DummyEventManager();
-        $manager->setEventDispatcher($dummyDispatcher);
+        $app = new Application(eventDispatcher: $dummyDispatcher);
 
-        $this->assertFalse($manager->hasListeners('nonexistent.event'));
+        $this->assertFalse($app->hasListeners('nonexistent.event'));
 
-        $manager->on('existent.event', function () {
+        $app->on('existent.event', function () {
         });
 
-        $this->assertTrue($manager->hasListeners('existent.event'));
+        $this->assertTrue($app->hasListeners('existent.event'));
     }
 
     /**
-     * @throws EventManagerException
+     * @throws EventManagerException|PathEnvironmentException
      */
     public function test_getEvents(): void
     {
         $dummyDispatcher = new TestDummyEventDispatcher();
-        $manager = new DummyEventManager();
-        $manager->setEventDispatcher($dummyDispatcher);
+        $app = new Application(eventDispatcher: $dummyDispatcher);
 
-        $this->assertCount(1, $manager->getEvents());
+        $this->assertCount(1, $app->getEvents());
     }
 
-    public function test_getEventsEmpty(): void
-    {
-        $manager = new DummyEventManager();
-        $this->assertEmpty($manager->getEvents());
-    }
-
+    /**
+     * @throws EventManagerException|PathEnvironmentException
+     */
     public function test_setEventStore(): void
     {
-        $manager = new DummyEventManager();
+        $app = new Application();
         $store = new TestDummyEventStore();
-        $manager->setEventStore($store);
 
-        $reflection = new ReflectionClass($manager);
-        $property = $reflection->getProperty('eventStore');
-        $eventStoreValue = $property->getValue($manager);
+        $app->setEventStore($store);
+        $app->fireEvent('probe.event', 'probe-arg');
 
-        $this->assertInstanceOf(
-            SystemEventStoreInterface::class,
-            $eventStoreValue
-        );
+        $this->assertArrayHasKey('probe.event', $store->getEvents());
+        $this->assertSame('probe-arg', $store->getEvents()['probe.event'][0]['args'][0]);
     }
-
 }
 
 # Dummy classes
@@ -289,16 +274,6 @@ class TestDummyEventStore implements SystemEventStoreInterface
     }
 }
 
-class DummyEventManager
-{
-    use EventManagerTrait;
-
-    public function __construct()
-    {
-        $this->eventStore = new TestDummyEventStore();
-    }
-}
-
 class TestDummyEventDispatcher implements EventDispatcherInterface
 {
     /**
@@ -313,7 +288,6 @@ class TestDummyEventDispatcher implements EventDispatcherInterface
      * @var array<string, array<int, array<string, mixed>>>
      */
     public array $dispatchedErrorEvents = [];
-    public bool $throwOnDispatch = false;
 
     public function on(
         string $event,
@@ -355,9 +329,6 @@ class TestDummyEventDispatcher implements EventDispatcherInterface
         string $event,
         mixed ...$args
     ): void {
-        if ($this->throwOnDispatch) {
-            throw new Exception("Simulated dispatch error");
-        }
         $record = [
             'event' => $event,
             'args' => $args,

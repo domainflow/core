@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Application\Class;
+namespace DomainFlow\Tests\Unit\Application\Class;
 
 use DomainFlow\Application\Class\SystemEventStore;
 use PHPUnit\Framework\Attributes\CoversClass;
