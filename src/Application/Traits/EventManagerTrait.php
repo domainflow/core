@@ -33,10 +33,10 @@ trait EventManagerTrait
     /**
      * Set the event dispatcher and fire an event indicating the dispatcher was set.
      *
-     * Call this before boot() (e.g. via the Application constructor). Once
-     * EventDispatcherServiceProvider has registered the dispatcher active at
-     * that time as EventDispatcherInterface in the container, a later call
-     * to this method does not update that container binding.
+     * May be called at any time, including after boot(): EventDispatcherInterface
+     * resolves through the container as a live binding to the Application's
+     * current dispatcher, so a later container resolution always reflects the
+     * dispatcher set here, not a stale boot-time snapshot.
      *
      * @param EventDispatcherInterface $dispatcher
      * @throws EventManagerException
