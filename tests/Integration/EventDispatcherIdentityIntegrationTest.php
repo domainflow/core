@@ -65,6 +65,61 @@ class EventDispatcherIdentityIntegrationTest extends TestCase
 
         $this->assertEquals("Order 4711 shipped.\n", $output);
     }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_containerResolvedDispatcherReflectsPostBootSetEventDispatcherSwap(): void
+    {
+        $app = new Application();
+        $app->boot();
+
+        $swapped = new BasicEventDispatcher();
+        $app->setEventDispatcher($swapped);
+
+        $resolved = $app->get(EventDispatcherInterface::class);
+
+        $this->assertSame(
+            $swapped,
+            $resolved,
+            'A binding resolved after a post-boot setEventDispatcher() call must reflect the new dispatcher, not the boot-time snapshot.'
+        );
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_diConsumerObservesApplicationRegisteredListenersBeforeAndAfterPostBootDispatcherSwap(): void
+    {
+        $app = new Application();
+        $app->boot();
+
+        ob_start();
+        $app->on('order.shipped', function (string $orderId): void {
+            echo "Before swap: order $orderId shipped.\n";
+        });
+        $consumerBeforeSwap = $app->get(NotificationDispatcherConsumer::class);
+        $consumerBeforeSwap->notifyOrderShipped('1');
+        $outputBeforeSwap = ob_get_clean();
+
+        $this->assertEquals("Before swap: order 1 shipped.\n", $outputBeforeSwap);
+
+        $app->setEventDispatcher(new BasicEventDispatcher());
+
+        ob_start();
+        $app->on('order.shipped', function (string $orderId): void {
+            echo "After swap: order $orderId shipped.\n";
+        });
+        $consumerAfterSwap = $app->get(NotificationDispatcherConsumer::class);
+        $consumerAfterSwap->notifyOrderShipped('2');
+        $outputAfterSwap = ob_get_clean();
+
+        $this->assertEquals(
+            "After swap: order 2 shipped.\n",
+            $outputAfterSwap,
+            'A consumer resolved after a post-boot setEventDispatcher() swap must observe listeners registered on the new dispatcher.'
+        );
+    }
 }
 
 # dummy class

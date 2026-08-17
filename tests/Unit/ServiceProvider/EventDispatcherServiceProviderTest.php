@@ -92,6 +92,26 @@ class EventDispatcherServiceProviderTest extends TestCase
         $provider->defer = true;
         $this->assertTrue($provider->isDeferred());
     }
+
+    /**
+     * @throws EventManagerException|PathEnvironmentException|NotFoundExceptionInterface|ContainerExceptionInterface
+     */
+    public function test_containerBindingReflectsDispatcherSwappedAfterRegister(): void
+    {
+        $app = new TestApplication(sys_get_temp_dir());
+        $provider = new EventDispatcherServiceProvider();
+
+        $provider->register($app);
+
+        $swapped = new BasicEventDispatcher();
+        $app->setEventDispatcher($swapped);
+
+        $this->assertSame(
+            $swapped,
+            $app->get(EventDispatcherInterface::class),
+            'The container binding must resolve the dispatcher current at resolution time, not the one active at register() time.'
+        );
+    }
 }
 
 // dummy class

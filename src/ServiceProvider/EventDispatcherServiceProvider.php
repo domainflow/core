@@ -17,10 +17,13 @@ class EventDispatcherServiceProvider extends AbstractServiceProvider
     public bool $defer = false;
 
     /**
-     * Bind the Application's own event dispatcher instance as
-     * EventDispatcherInterface, so lifecycle listeners registered via
-     * Application::on()/once() and services resolved through the container
-     * observe the same event stream instead of two independent dispatchers.
+     * Bind EventDispatcherInterface to a non-shared closure that always
+     * resolves the Application's *current* event dispatcher, so lifecycle
+     * listeners registered via Application::on()/once() and services
+     * resolved through the container observe the same event stream instead
+     * of two independent dispatchers — even across a post-boot
+     * setEventDispatcher() swap, which a one-time instance() snapshot at
+     * register() time would miss.
      *
      * @param Application $app
      * @return void
@@ -28,9 +31,10 @@ class EventDispatcherServiceProvider extends AbstractServiceProvider
     public function register(
         Application $app
     ): void {
-        $app->instance(
+        $app->bind(
             EventDispatcherInterface::class,
-            $app->getEventDispatcher()
+            static fn (): EventDispatcherInterface => $app->getEventDispatcher(),
+            shared: false
         );
     }
 
