@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DomainFlow\Tests\Unit\Application\Class;
 
 use DomainFlow\Application\Class\SystemEventStore;
+use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
@@ -103,5 +104,104 @@ final class SystemEventStoreTest extends TestCase
         $events = $store->getEvents();
         $this->assertArrayHasKey('new', $events);
         $this->assertSame(0, $events['new'][0]['order'], 'Order should restart at 0 after clear');
+    }
+
+    public function test_maxRetainedEventsCapsTotalCountAcrossEventNames(): void
+    {
+        $store = new SystemEventStore();
+        $store->setMaxRetainedEvents(2);
+        $store->addEvent('alpha', [1]);
+        $store->addEvent('alpha', [2]);
+        $store->addEvent('alpha', [3]);
+
+        $events = $store->getEvents();
+        $this->assertCount(2, $events['alpha'], 'Only the 2 most recent firings should be retained.');
+        $this->assertSame(1, $events['alpha'][0]['order'], 'The oldest firing (order 0) should have been evicted.');
+        $this->assertSame(2, $events['alpha'][1]['order']);
+        $this->assertCount(2, $store->getSortedEvents());
+    }
+
+    public function test_maxRetainedEventsEvictsTheGloballyOldestFiringAcrossDifferentEventNames(): void
+    {
+        $store = new SystemEventStore();
+        $store->setMaxRetainedEvents(2);
+        $store->addEvent('alpha', ['a1']);
+        $store->addEvent('alpha', ['a2']);
+        $store->addEvent('beta', ['b1']);
+
+        $events = $store->getEvents();
+        $this->assertCount(1, $events['alpha'], "Alpha's oldest firing (global order 0) should have been evicted.");
+        $this->assertSame(1, $events['alpha'][0]['order']);
+        $this->assertCount(1, $events['beta']);
+        $this->assertSame(2, $events['beta'][0]['order']);
+    }
+
+    public function test_maxRetainedEventsRemovesTheEventNameKeyOnceItsLastFiringIsEvicted(): void
+    {
+        $store = new SystemEventStore();
+        $store->setMaxRetainedEvents(1);
+        $store->addEvent('alpha', ['a1']);
+        $store->addEvent('beta', ['b1']);
+
+        $events = $store->getEvents();
+        $this->assertArrayNotHasKey('alpha', $events, 'A name with no remaining firings must not linger as an empty key.');
+        $this->assertArrayHasKey('beta', $events);
+    }
+
+    public function test_maxRetainedEventsSurvivesClearAndResumesCappingFromZero(): void
+    {
+        $store = new SystemEventStore();
+        $store->setMaxRetainedEvents(1);
+        $store->addEvent('alpha', ['a1']);
+        $store->clear();
+
+        $store->addEvent('beta', ['b1']);
+        $store->addEvent('gamma', ['g1']);
+
+        $events = $store->getEvents();
+        $this->assertArrayNotHasKey('beta', $events, 'The cap must still apply after clear().');
+        $this->assertCount(1, $events['gamma']);
+        $this->assertSame(1, $events['gamma'][0]['order'], 'Order counter restarts at 0 after clear() (beta gets order 0), then keeps advancing; eviction does not reuse a dropped order.');
+    }
+
+    public function test_unboundedStoreNeverEvicts(): void
+    {
+        $store = new SystemEventStore();
+        for ($i = 0; $i < 50; $i++) {
+            $store->addEvent('flood', [$i]);
+        }
+
+        $this->assertCount(50, $store->getEvents()['flood'], 'A store with no configured cap retains every firing, as before this change.');
+    }
+
+    public function test_setMaxRetainedEventsNullRestoresUnboundedRetention(): void
+    {
+        $store = new SystemEventStore();
+        $store->setMaxRetainedEvents(1);
+        $store->addEvent('alpha', ['a1']);
+
+        $store->setMaxRetainedEvents(null);
+        $store->addEvent('beta', ['b1']);
+        $store->addEvent('gamma', ['g1']);
+
+        $events = $store->getEvents();
+        $this->assertArrayHasKey('alpha', $events, 'Firings retained under the cap must survive raising it back to unbounded.');
+        $this->assertArrayHasKey('beta', $events);
+        $this->assertArrayHasKey('gamma', $events);
+    }
+
+    public function test_setMaxRetainedEventsRejectsZero(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('maxRetainedEvents must be a positive integer or null.');
+
+        (new SystemEventStore())->setMaxRetainedEvents(0);
+    }
+
+    public function test_setMaxRetainedEventsRejectsNegative(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        (new SystemEventStore())->setMaxRetainedEvents(-1);
     }
 }
