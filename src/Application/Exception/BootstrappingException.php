@@ -109,6 +109,39 @@ final class BootstrappingException extends Exception
     }
 
     /**
+     * Factory method for a service provider dependency cycle detected while
+     * resolving a declarative registration/boot order.
+     *
+     * @param string $providerClass
+     * @return self
+     */
+    public static function forProviderDependencyCycle(
+        string $providerClass
+    ): self {
+        return new self(
+            "Service provider dependency cycle detected involving [$providerClass]."
+        );
+    }
+
+    /**
+     * Factory method for a service provider declaring dependsOn() on a
+     * provider class that was never registered in the same boot() cycle.
+     *
+     * @param string $providerClass
+     * @param string $dependencyClass
+     * @return self
+     */
+    public static function forUnknownProviderDependency(
+        string $providerClass,
+        string $dependencyClass
+    ): self {
+        return new self(
+            "Service provider [$providerClass] declares a dependency on [$dependencyClass], "
+            . "which was never registered."
+        );
+    }
+
+    /**
      * Factory method for generic bootstrapping errors.
      *
      * @param string $message
