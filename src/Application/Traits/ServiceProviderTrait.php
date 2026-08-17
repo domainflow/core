@@ -6,6 +6,7 @@ namespace DomainFlow\Application\Traits;
 
 use DomainFlow\Application\Exception\BootstrappingException;
 use DomainFlow\Application\Exception\EventManagerException;
+use DomainFlow\Service\OrderedServiceProviderInterface;
 use DomainFlow\Service\ServiceProviderInterface;
 use Psr\Container\ContainerExceptionInterface;
 use Psr\Container\NotFoundExceptionInterface;
@@ -228,6 +229,75 @@ trait ServiceProviderTrait
     public function getProviders(): array
     {
         return $this->serviceProviders;
+    }
+
+    /**
+     * Resolve a registration/boot order for the currently registered
+     * providers that respects every OrderedServiceProviderInterface
+     * dependsOn() declaration, via a stable topological sort: a provider
+     * with no declared dependencies (or that does not implement the
+     * interface at all) keeps its plain insertion-order position relative
+     * to every other undeclared provider.
+     *
+     * @throws BootstrappingException on a dependency cycle, or a dependency
+     *         on a provider class that was never registered.
+     * @return array<string, ServiceProviderInterface>
+     */
+    protected function orderProvidersForBootstrapping(): array
+    {
+        $byClass = [];
+        foreach ($this->serviceProviders as $provider) {
+            $byClass[get_class($provider)] = $provider;
+        }
+
+        $ordered = [];
+        $visiting = [];
+        $visited = [];
+
+        foreach (array_keys($byClass) as $class) {
+            $this->visitProviderForOrdering($class, $byClass, $visiting, $visited, $ordered);
+        }
+
+        return $ordered;
+    }
+
+    /**
+     * @param array<string, ServiceProviderInterface> $byClass
+     * @param array<string, true> $visiting
+     * @param array<string, true> $visited
+     * @param array<string, ServiceProviderInterface> $ordered
+     * @throws BootstrappingException
+     * @return void
+     */
+    private function visitProviderForOrdering(
+        string $class,
+        array $byClass,
+        array &$visiting,
+        array &$visited,
+        array &$ordered
+    ): void {
+        if (isset($visited[$class])) {
+            return;
+        }
+        if (isset($visiting[$class])) {
+            throw BootstrappingException::forProviderDependencyCycle($class);
+        }
+
+        $provider = $byClass[$class];
+        $visiting[$class] = true;
+
+        if ($provider instanceof OrderedServiceProviderInterface) {
+            foreach ($provider->dependsOn() as $dependencyClass) {
+                if (!isset($byClass[$dependencyClass])) {
+                    throw BootstrappingException::forUnknownProviderDependency($class, $dependencyClass);
+                }
+                $this->visitProviderForOrdering($dependencyClass, $byClass, $visiting, $visited, $ordered);
+            }
+        }
+
+        unset($visiting[$class]);
+        $visited[$class] = true;
+        $ordered[$class] = $provider;
     }
 
     /**

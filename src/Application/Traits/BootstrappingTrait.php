@@ -168,12 +168,24 @@ trait BootstrappingTrait
      * any provider, and a later boot() retry only (re-)attempts providers
      * that have not yet successfully registered.
      *
+     * Both passes iterate providers in the order resolved by
+     * orderProvidersForBootstrapping(), which respects declared
+     * OrderedServiceProviderInterface dependencies. Note that register()
+     * already ran immediately at registerProvider() call time for any
+     * provider registered before boot() (see registerProvider()'s eager
+     * path), so declared ordering changes the register pass here only for
+     * a provider added during registerDefaultServiceProviders() above (or
+     * a future direct addition to $serviceProviders); the boot pass is
+     * where a declared dependency reliably takes effect.
+     *
      * @throws Throwable
      * @return void
      */
     private function registerAndBootProviders(): void
     {
-        foreach ($this->serviceProviders as $provider) {
+        $orderedProviders = $this->orderProvidersForBootstrapping();
+
+        foreach ($orderedProviders as $provider) {
             try {
                 $this->registerProviderOnce($provider);
             } catch (Throwable $e) {
@@ -181,7 +193,7 @@ trait BootstrappingTrait
                 throw BootstrappingException::forProviderRegistrationFailure(get_class($provider), $e);
             }
         }
-        foreach ($this->serviceProviders as $provider) {
+        foreach ($orderedProviders as $provider) {
             $this->bootProviderOnce($provider);
         }
     }

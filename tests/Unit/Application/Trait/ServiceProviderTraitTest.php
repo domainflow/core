@@ -9,6 +9,7 @@ use DomainFlow\Application\Class\BasicEventDispatcher;
 use DomainFlow\Application\Class\SystemEventStore;
 use DomainFlow\Application\Exception\BootstrappingException;
 use DomainFlow\Service\AbstractServiceProvider;
+use DomainFlow\Service\OrderedServiceProviderInterface;
 use DomainFlow\Service\ServiceProviderInterface;
 use DomainFlow\ServiceProvider\EventDispatcherServiceProvider;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -429,6 +430,149 @@ final class ServiceProviderTraitTest extends TestCase
     }
 
     /**
+     * @throws Throwable
+     */
+    public function test_bootOrderRespectsDeclaredDependencyDespiteReverseRegistrationOrder(): void
+    {
+        OrderedProviderLog::reset();
+        $app = new Application();
+
+        $b = new OrderedProviderB();
+        $a = new OrderedProviderA();
+
+        $app->registerProvider($b);
+        $app->registerProvider($a);
+
+        $app->boot();
+
+        $registerLog = array_values(array_filter(
+            OrderedProviderLog::$log,
+            static fn (string $entry): bool => str_ends_with($entry, '::register')
+        ));
+        $this->assertSame(
+            [OrderedProviderB::class . '::register', OrderedProviderA::class . '::register'],
+            $registerLog,
+            'register() runs immediately at registerProvider() call time, in call order — declared '
+            . 'ordering only reorders boot(), which has not run yet at that point. This is intentional '
+            . 'and documented in docs/ARCHITECTURE.md.'
+        );
+
+        $bootLog = array_values(array_filter(
+            OrderedProviderLog::$log,
+            static fn (string $entry): bool => str_ends_with($entry, '::boot')
+        ));
+        $this->assertSame(
+            [OrderedProviderA::class . '::boot', OrderedProviderB::class . '::boot'],
+            $bootLog,
+            'boot() must respect the declared dependency: A (the dependency) boots before B (the dependent), regardless of registration order.'
+        );
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_diamondDependencyOrdersAllPrerequisitesBeforeDependent(): void
+    {
+        OrderedProviderLog::reset();
+        $app = new Application();
+
+        // Scrambled registration order: C (depends on A, B) before B (depends on A) before A.
+        $app->registerProvider(new OrderedProviderC());
+        $app->registerProvider(new OrderedProviderB());
+        $app->registerProvider(new OrderedProviderA());
+
+        $app->boot();
+
+        $bootLog = array_values(array_filter(
+            OrderedProviderLog::$log,
+            static fn (string $entry): bool => str_ends_with($entry, '::boot')
+        ));
+        $this->assertSame(
+            [OrderedProviderA::class . '::boot', OrderedProviderB::class . '::boot', OrderedProviderC::class . '::boot'],
+            $bootLog,
+            'A diamond dependency (C depends on A and B; B depends on A) must still produce a single valid topological order.'
+        );
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_providersWithNoDeclaredDependenciesKeepInsertionOrder(): void
+    {
+        DummyOrderProviderFirst::$bootOrder = [];
+        $app = new Application();
+
+        $app->registerProvider(new DummyOrderProviderFirst());
+        $app->registerProvider(new DummyOrderProviderSecond());
+
+        $app->boot();
+
+        $this->assertSame(
+            [DummyOrderProviderFirst::class, DummyOrderProviderSecond::class],
+            DummyOrderProviderFirst::$bootOrder,
+            'Providers declaring no dependencies must boot in plain insertion order, unchanged from before this feature.'
+        );
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_deferredProviderResolvedBeforeBootIsNotRebootedWhenBootRuns(): void
+    {
+        $app = new Application();
+        $provider = new DummyProvider(['service_resolved_early'], true);
+        $app->registerProvider($provider);
+
+        // Resolving the deferred provider before boot() registers and boots
+        // it immediately via resolveDeferredProvider().
+        $app->get('service_resolved_early');
+        $this->assertSame(1, $provider->bootCallCount);
+
+        // boot()'s ordering pass sees this now-registered provider again;
+        // it must not be booted a second time.
+        $app->boot();
+        $this->assertSame(1, $provider->bootCallCount, 'A provider already booted before boot() must not be re-booted.');
+    }
+
+    public function test_providerDependencyCycleThrowsClearBootstrappingException(): void
+    {
+        $app = new Application();
+        $app->registerProvider(new CyclicProviderX());
+        $app->registerProvider(new CyclicProviderY());
+
+        try {
+            $app->boot();
+            $this->fail('Expected BootstrappingException was not thrown');
+        } catch (BootstrappingException $e) {
+            $prev = $e->getPrevious();
+            $this->assertNotNull($prev, 'Previous exception should carry the specific cycle detail.');
+            $this->assertMatchesRegularExpression(
+                '/dependency cycle detected involving \[' . preg_quote(CyclicProviderX::class, '/') . '\]/',
+                $prev->getMessage()
+            );
+        }
+    }
+
+    public function test_providerDependencyOnNeverRegisteredProviderClassThrows(): void
+    {
+        $app = new Application();
+        $app->registerProvider(new DependsOnUnregisteredProvider());
+
+        try {
+            $app->boot();
+            $this->fail('Expected BootstrappingException was not thrown');
+        } catch (BootstrappingException $e) {
+            $prev = $e->getPrevious();
+            $this->assertNotNull($prev, 'Previous exception should carry the specific dependency detail.');
+            $this->assertSame(
+                'Service provider [' . DependsOnUnregisteredProvider::class . '] declares a dependency on '
+                . '[' . SecondDummyProvider::class . '], which was never registered.',
+                $prev->getMessage()
+            );
+        }
+    }
+
+    /**
      * @param array<int, mixed> $expectedArgs
      */
     private function assertEventFiredWithArgs(
@@ -631,5 +775,241 @@ class CountingDeferredProvider extends AbstractServiceProvider
     public function isDeferred(): bool
     {
         return $this->defer;
+    }
+}
+
+class OrderedProviderLog
+{
+    /** @var list<string> */
+    public static array $log = [];
+
+    public static function reset(): void
+    {
+        self::$log = [];
+    }
+}
+
+class OrderedProviderA implements OrderedServiceProviderInterface
+{
+    public function register(
+        Application $app
+    ): void {
+        OrderedProviderLog::$log[] = self::class . '::register';
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+        OrderedProviderLog::$log[] = self::class . '::boot';
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+
+    public function dependsOn(): array
+    {
+        return [];
+    }
+}
+
+class OrderedProviderB implements OrderedServiceProviderInterface
+{
+    public function register(
+        Application $app
+    ): void {
+        OrderedProviderLog::$log[] = self::class . '::register';
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+        OrderedProviderLog::$log[] = self::class . '::boot';
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+
+    public function dependsOn(): array
+    {
+        return [OrderedProviderA::class];
+    }
+}
+
+class OrderedProviderC implements OrderedServiceProviderInterface
+{
+    public function register(
+        Application $app
+    ): void {
+        OrderedProviderLog::$log[] = self::class . '::register';
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+        OrderedProviderLog::$log[] = self::class . '::boot';
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+
+    public function dependsOn(): array
+    {
+        return [OrderedProviderA::class, OrderedProviderB::class];
+    }
+}
+
+class DummyOrderProviderFirst implements ServiceProviderInterface
+{
+    /** @var list<string> */
+    public static array $bootOrder = [];
+
+    public function register(
+        Application $app
+    ): void {
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+        self::$bootOrder[] = self::class;
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+}
+
+class DummyOrderProviderSecond implements ServiceProviderInterface
+{
+    public function register(
+        Application $app
+    ): void {
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+        DummyOrderProviderFirst::$bootOrder[] = self::class;
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+}
+
+class CyclicProviderX implements OrderedServiceProviderInterface
+{
+    public function register(
+        Application $app
+    ): void {
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+
+    public function dependsOn(): array
+    {
+        return [CyclicProviderY::class];
+    }
+}
+
+class CyclicProviderY implements OrderedServiceProviderInterface
+{
+    public function register(
+        Application $app
+    ): void {
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+
+    public function dependsOn(): array
+    {
+        return [CyclicProviderX::class];
+    }
+}
+
+class DependsOnUnregisteredProvider implements OrderedServiceProviderInterface
+{
+    public function register(
+        Application $app
+    ): void {
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+
+    public function dependsOn(): array
+    {
+        return [SecondDummyProvider::class];
     }
 }
