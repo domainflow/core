@@ -5,39 +5,41 @@ declare(strict_types=1);
 namespace DomainFlow\Tests\Unit\Application\Trait;
 
 use DomainFlow\Application;
+use DomainFlow\Application\Class\BasicEventDispatcher;
+use DomainFlow\Application\Class\SystemEventStore;
 use DomainFlow\Application\Enum\EnvironmentEnum;
 use DomainFlow\Application\Exception\EventManagerException;
 use DomainFlow\Application\Exception\PathEnvironmentException;
-use DomainFlow\Application\Traits\PathEnvironmentTrait;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
-use ReflectionClass;
-use ReflectionException;
 
 #[CoversClass(Application::class)]
 #[CoversClass(PathEnvironmentException::class)]
+#[CoversClass(BasicEventDispatcher::class)]
+#[CoversClass(SystemEventStore::class)]
 final class PathEnvironmentTraitTest extends TestCase
 {
-    private DummyPathEnvironment $dummy;
+    private Application $app;
 
+    /**
+     * @throws EventManagerException|PathEnvironmentException
+     */
     protected function setUp(): void
     {
-        $this->dummy = new DummyPathEnvironment();
+        $this->app = new Application();
     }
 
     /**
-     * @throws EventManagerException|PathEnvironmentException|ReflectionException
+     * @throws EventManagerException|PathEnvironmentException
      */
     public function test_setBasePath_valid(): void
     {
         $validDir = __DIR__;
-        $this->dummy->events = [];
-        $result = $this->dummy->setBasePath($validDir);
-        $basePath = $this->getProtectedProperty($this->dummy, 'basePath');
+        $result = $this->app->setBasePath($validDir);
 
-        $this->assertSame($validDir, $basePath);
-        $this->assertSame($this->dummy, $result);
-        $this->assertEventFired($this->dummy->events, 'path.base.set', $validDir);
+        $this->assertSame($validDir, $this->app->basePath());
+        $this->assertSame($this->app, $result);
+        $this->assertEventFired($this->app, 'path.base.set', $validDir);
     }
 
     /**
@@ -45,13 +47,12 @@ final class PathEnvironmentTraitTest extends TestCase
      */
     public function test_setBasePath_invalid(): void
     {
-        $this->dummy->events = [];
         $invalidDir = '/nonexistent_directory_xyz';
 
         $this->expectException(PathEnvironmentException::class);
         $this->expectExceptionMessage("Invalid base path provided:");
 
-        $this->dummy->setBasePath($invalidDir);
+        $this->app->setBasePath($invalidDir);
     }
 
     /**
@@ -60,27 +61,25 @@ final class PathEnvironmentTraitTest extends TestCase
     public function test_basePath_method(): void
     {
         $validDir = __DIR__;
-        $this->dummy->setBasePath($validDir);
+        $this->app->setBasePath($validDir);
         $subPath = 'sub/dir';
         $expected = $validDir . DIRECTORY_SEPARATOR . $subPath;
 
-        $this->assertSame($expected, $this->dummy->basePath($subPath));
-        $this->assertSame($validDir, $this->dummy->basePath());
+        $this->assertSame($expected, $this->app->basePath($subPath));
+        $this->assertSame($validDir, $this->app->basePath());
     }
 
     /**
-     * @throws EventManagerException|PathEnvironmentException|ReflectionException
+     * @throws EventManagerException|PathEnvironmentException
      */
     public function test_setConfigPath_valid(): void
     {
         $validDir = __DIR__;
-        $this->dummy->events = [];
-        $result = $this->dummy->setConfigPath($validDir);
-        $configPath = $this->getProtectedProperty($this->dummy, 'configPath');
+        $result = $this->app->setConfigPath($validDir);
 
-        $this->assertSame($validDir, $configPath);
-        $this->assertSame($this->dummy, $result);
-        $this->assertEventFired($this->dummy->events, 'path.config.set', $validDir);
+        $this->assertSame($validDir, $this->app->configPath());
+        $this->assertSame($this->app, $result);
+        $this->assertEventFired($this->app, 'path.config.set', $validDir);
     }
 
     /**
@@ -88,13 +87,12 @@ final class PathEnvironmentTraitTest extends TestCase
      */
     public function test_setConfigPath_invalid(): void
     {
-        $this->dummy->events = [];
         $invalidDir = '/nonexistent_directory_abc';
 
         $this->expectException(PathEnvironmentException::class);
         $this->expectExceptionMessage("Invalid configuration path provided:");
 
-        $this->dummy->setConfigPath($invalidDir);
+        $this->app->setConfigPath($invalidDir);
     }
 
     /**
@@ -103,17 +101,17 @@ final class PathEnvironmentTraitTest extends TestCase
     public function test_configPath_method(): void
     {
         $validDir = __DIR__;
-        $this->dummy->setConfigPath($validDir);
+        $this->app->setConfigPath($validDir);
         $subPath = 'config/sub';
         $expected = $validDir . DIRECTORY_SEPARATOR . $subPath;
 
-        $this->assertSame($expected, $this->dummy->configPath($subPath));
-        $this->assertSame($validDir, $this->dummy->configPath());
+        $this->assertSame($expected, $this->app->configPath($subPath));
+        $this->assertSame($validDir, $this->app->configPath());
     }
 
     public function test_default_environment(): void
     {
-        $this->assertSame(EnvironmentEnum::ENVIRONMENT_PRODUCTION, $this->dummy->environment());
+        $this->assertSame(EnvironmentEnum::ENVIRONMENT_PRODUCTION, $this->app->environment());
     }
 
     /**
@@ -121,62 +119,23 @@ final class PathEnvironmentTraitTest extends TestCase
      */
     public function test_setEnvironment_and_isEnvironment(): void
     {
-        $this->dummy->events = [];
-        $this->dummy->setEnvironment(EnvironmentEnum::ENVIRONMENT_DEVELOPMENT);
+        $this->app->setEnvironment(EnvironmentEnum::ENVIRONMENT_DEVELOPMENT);
 
-        $this->assertSame(EnvironmentEnum::ENVIRONMENT_DEVELOPMENT, $this->dummy->environment());
-        $this->assertTrue($this->dummy->isEnvironment(EnvironmentEnum::ENVIRONMENT_DEVELOPMENT));
-        $this->assertEventFired($this->dummy->events, 'path.environment.set', EnvironmentEnum::ENVIRONMENT_DEVELOPMENT);
+        $this->assertSame(EnvironmentEnum::ENVIRONMENT_DEVELOPMENT, $this->app->environment());
+        $this->assertTrue($this->app->isEnvironment(EnvironmentEnum::ENVIRONMENT_DEVELOPMENT));
+        $this->assertEventFired($this->app, 'path.environment.set', EnvironmentEnum::ENVIRONMENT_DEVELOPMENT);
     }
 
-    /**
-     * @param array<string, mixed> $events
-     * @param string $expectedEvent
-     * @param null $expectedArg
-     * @return void
-     */
     private function assertEventFired(
-        array $events,
+        Application $app,
         string $expectedEvent,
-        $expectedArg = null
+        mixed $expectedArg = null
     ): void {
-        foreach ($events as [$event, $args]) {
-            if ($event === $expectedEvent) {
-                if ($expectedArg !== null) {
-                    $this->assertSame($expectedArg, $args[0]);
-                }
+        $events = $app->getEvents();
+        $this->assertArrayHasKey($expectedEvent, $events, "Event {$expectedEvent} was not fired.");
 
-                return;
-            }
+        if ($expectedArg !== null) {
+            $this->assertSame($expectedArg, $events[$expectedEvent][0]['args'][0]);
         }
-        $this->fail("Event {$expectedEvent} was not fired.");
-    }
-
-    /**
-     * @throws ReflectionException
-     */
-    private function getProtectedProperty(
-        object $object,
-        string $property
-    ) {
-        $refClass = new ReflectionClass($object);
-        $refProp = $refClass->getProperty($property);
-
-        return $refProp->getValue($object);
-    }
-}
-
-# Dummy class
-class DummyPathEnvironment
-{
-    use PathEnvironmentTrait;
-
-    public array $events = [];
-
-    public function fireEvent(
-        string $event,
-        ...$args
-    ): void {
-        $this->events[] = [$event, $args];
     }
 }

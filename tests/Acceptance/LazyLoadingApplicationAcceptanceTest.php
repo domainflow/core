@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace DomainFlow\Tests\Acceptance;
 
-namespace DomainFlow\Tests\Acceptance;
-
 use DomainFlow\Application;
 use DomainFlow\Service\AbstractServiceProvider;
 use PHPUnit\Framework\Attributes\CoversNothing;

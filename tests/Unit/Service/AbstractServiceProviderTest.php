@@ -9,7 +9,6 @@ use DomainFlow\Service\AbstractServiceProvider;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\MockObject\Exception;
 use PHPUnit\Framework\TestCase;
-use ReflectionClass;
 use Throwable;
 
 #[CoversClass(AbstractServiceProvider::class)]
@@ -48,9 +47,7 @@ class AbstractServiceProviderTest extends TestCase
     public function test_defaultDeferIsFalse(): void
     {
         $provider = new DummyServiceProvider();
-        $reflection = new ReflectionClass($provider);
-        $deferProperty = $reflection->getProperty('defer');
-        $this->assertFalse($deferProperty->getValue($provider));
+        $this->assertFalse($provider->isDeferred());
     }
 }
 

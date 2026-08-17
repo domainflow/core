@@ -6,19 +6,24 @@ namespace DomainFlow\Tests\Unit\Application\Trait;
 
 use Closure;
 use DomainFlow\Application;
+use DomainFlow\Application\Class\BasicEventDispatcher;
 use DomainFlow\Application\Class\FileReader;
+use DomainFlow\Application\Class\SystemEventStore;
 use DomainFlow\Application\Exception\EventManagerException;
 use DomainFlow\Application\Exception\ServiceDefinitionLoaderException;
-use DomainFlow\Application\Traits\ServiceDefinitionLoaderTrait;
 use Exception;
 use org\bovigo\vfs\vfsStream;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
+use stdClass;
 use Symfony\Component\Yaml\Yaml;
+use Throwable;
 
 #[CoversClass(Application::class)]
 #[CoversClass(ServiceDefinitionLoaderException::class)]
+#[CoversClass(BasicEventDispatcher::class)]
+#[CoversClass(SystemEventStore::class)]
 final class ServiceDefinitionLoaderTraitTest extends TestCase
 {
     private string $tempDir;
@@ -38,42 +43,43 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
     }
 
     /**
-     * @throws EventManagerException| ServiceDefinitionLoaderException
+     * @throws EventManagerException|ServiceDefinitionLoaderException|\Psr\Container\ContainerExceptionInterface|\Psr\Container\NotFoundExceptionInterface|Throwable
      */
     public function test_loadValidPhpDefinitions(): void
     {
         $file = $this->tempDir . DIRECTORY_SEPARATOR . 'services.php';
 
-        file_put_contents($file, '<?php return ["TestService" => ["concrete" => "SomeClass", "shared" => true]];');
+        file_put_contents($file, '<?php return ["TestService" => ["concrete" => "stdClass", "shared" => true]];');
 
-        $loader = new DummyServiceDefinitionLoader();
-        $loader->loadServiceDefinitions($file);
+        $app = new Application();
+        $app->loadServiceDefinitions($file);
 
-        $this->assertArrayHasKey('TestService', $loader->bindings);
-        $this->assertTrue($loader->bindings['TestService']['shared']);
+        $this->assertTrue($app->has('TestService'));
+        $this->assertInstanceOf(stdClass::class, $app->get('TestService'));
+        $this->assertSame($app->get('TestService'), $app->get('TestService'), 'Definition declared shared: true.');
     }
 
     /**
-     * @throws EventManagerException|ServiceDefinitionLoaderException
+     * @throws EventManagerException|ServiceDefinitionLoaderException|\Psr\Container\ContainerExceptionInterface|\Psr\Container\NotFoundExceptionInterface|Throwable
      */
     public function test_loadValidJsonDefinitions(): void
     {
         $file = $this->tempDir . DIRECTORY_SEPARATOR . 'services.json';
         $data = [
-            "TestService" => ["concrete" => "SomeClass", "shared" => false],
+            "TestService" => ["concrete" => "stdClass", "shared" => false],
         ];
         file_put_contents($file, json_encode($data));
 
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new Application();
 
         $fakeReader = new FakeFileReader();
         $fakeReader->setFakeContents(file_get_contents($file));
-        $loader->setFileReader($fakeReader);
+        $app->setFileReader($fakeReader);
 
-        $loader->loadServiceDefinitions($file);
+        $app->loadServiceDefinitions($file);
 
-        $this->assertArrayHasKey('TestService', $loader->bindings);
-        $this->assertFalse($loader->bindings['TestService']['shared']);
+        $this->assertTrue($app->has('TestService'));
+        $this->assertNotSame($app->get('TestService'), $app->get('TestService'), 'Definition declared shared: false.');
     }
 
     /**
@@ -82,18 +88,18 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
     public function test_jsonFileReadFailure(): void
     {
         $file = $this->tempDir . DIRECTORY_SEPARATOR . 'services.json';
-        file_put_contents($file, '{"TestService": {"concrete": "SomeClass"}}');
+        file_put_contents($file, '{"TestService": {"concrete": "stdClass"}}');
 
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new Application();
         $fakeReader = new FakeFileReader();
 
         $fakeReader->setFakeContents(false);
-        $loader->setFileReader($fakeReader);
+        $app->setFileReader($fakeReader);
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage("Failed to read JSON service definition file: $file");
 
-        $loader->loadServiceDefinitions($file);
+        $app->loadServiceDefinitions($file);
     }
 
     /**
@@ -103,21 +109,21 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
     {
         $file = $this->tempDir . DIRECTORY_SEPARATOR . 'services.json';
 
-        file_put_contents($file, '{"TestService": {"concrete": "SomeClass"');
+        file_put_contents($file, '{"TestService": {"concrete": "stdClass"');
 
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new Application();
         $fakeReader = new FakeFileReader();
         $fakeReader->setFakeContents(file_get_contents($file));
-        $loader->setFileReader($fakeReader);
+        $app->setFileReader($fakeReader);
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage("JSON decode error in file: $file");
 
-        $loader->loadServiceDefinitions($file);
+        $app->loadServiceDefinitions($file);
     }
 
     /**
-     * @throws EventManagerException|ServiceDefinitionLoaderException
+     * @throws EventManagerException|ServiceDefinitionLoaderException|\Psr\Container\ContainerExceptionInterface|\Psr\Container\NotFoundExceptionInterface|Throwable
      */
     public function test_loadValidYamlDefinitions(): void
     {
@@ -128,20 +134,20 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
         $file = $this->tempDir . DIRECTORY_SEPARATOR . 'services.yaml';
         $yamlContent = <<<YAML
             TestService:
-              concrete: SomeClass
+              concrete: stdClass
               shared: true
             YAML;
         file_put_contents($file, $yamlContent);
 
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new Application();
         $fakeReader = new FakeFileReader();
         $fakeReader->setFakeContents($yamlContent);
-        $loader->setFileReader($fakeReader);
+        $app->setFileReader($fakeReader);
 
-        $loader->loadServiceDefinitions($file);
+        $app->loadServiceDefinitions($file);
 
-        $this->assertArrayHasKey('TestService', $loader->bindings);
-        $this->assertTrue($loader->bindings['TestService']['shared']);
+        $this->assertTrue($app->has('TestService'));
+        $this->assertInstanceOf(stdClass::class, $app->get('TestService'));
     }
 
     /**
@@ -154,18 +160,18 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
         }
 
         $file = $this->tempDir . DIRECTORY_SEPARATOR . 'services.yaml';
-        file_put_contents($file, "TestService:\n  concrete: SomeClass");
+        file_put_contents($file, "TestService:\n  concrete: stdClass");
 
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new Application();
         $fakeReader = new FakeFileReader();
 
         $fakeReader->setFakeContents(false);
-        $loader->setFileReader($fakeReader);
+        $app->setFileReader($fakeReader);
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage("Failed to read YAML service definition file: $file");
 
-        $loader->loadServiceDefinitions($file);
+        $app->loadServiceDefinitions($file);
     }
 
     /**
@@ -176,20 +182,20 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
         $file = $this->tempDir . DIRECTORY_SEPARATOR . 'services.txt';
         file_put_contents($file, "Some content");
 
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new Application();
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage("Unsupported file extension: txt");
 
-        $loader->loadServiceDefinitions($file);
+        $app->loadServiceDefinitions($file);
     }
 
     public function test_getFileReaderInitializesFileReader(): void
     {
-        $loader = new DummyServiceDefinitionLoader();
-        $reader = $loader->getFileReaderInstance();
+        $app = new TestableServiceDefinitionLoaderApplication();
+        $reader = $app->exposeGetFileReader();
 
-        $this->assertSame($reader, $loader->getFileReaderInstance());
+        $this->assertSame($reader, $app->exposeGetFileReader());
     }
 
     /**
@@ -200,10 +206,10 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
         vfsStream::setup('root');
         $nonExistentFile = vfsStream::url('root/nonexistent.php');
 
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new Application();
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage("Service definition file not found: $nonExistentFile");
-        $loader->loadServiceDefinitions($nonExistentFile);
+        $app->loadServiceDefinitions($nonExistentFile);
     }
 
     public function test_loadServiceDefinitionsDefinitionNotArrayUsingVfsStream(): void
@@ -213,27 +219,16 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
 
         file_put_contents($file, '<?php return ["TestService" => "not an array"];');
 
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new Application();
 
         $this->expectException(ServiceDefinitionLoaderException::class);
         $this->expectExceptionMessage("Definition is not an array");
 
         try {
-            $loader->loadServiceDefinitions($file);
+            $app->loadServiceDefinitions($file);
         } catch (ServiceDefinitionLoaderException $e) {
-
-            $errorFound = false;
-            foreach ($loader->events as $event) {
-                if ($event['event'] === 'service_definition.error') {
-                    $errorFound = true;
-                    $this->assertEquals('TestService', $event['args'][0]);
-                    $this->assertEquals("Definition is not an array", $event['args'][1]);
-                    break;
-                }
-            }
-            $this->assertTrue($errorFound, "Expected error event was not fired.");
+            $this->assertEventFiredWithArgs($app, 'service_definition.error', ['TestService', 'Definition is not an array']);
             throw $e;
-        } catch (EventManagerException $e) {
         }
     }
 
@@ -246,20 +241,20 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
         $file = vfsStream::url('root/services.php');
         file_put_contents($file, '<?php return "invalid format";');
 
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new Application();
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage("Invalid service definitions format in file: $file");
 
-        $loader->loadServiceDefinitions($file);
+        $app->loadServiceDefinitions($file);
     }
 
     /**
-     * @throws EventManagerException|ServiceDefinitionLoaderException
+     * @throws EventManagerException|ServiceDefinitionLoaderException|\Psr\Container\ContainerExceptionInterface|\Psr\Container\NotFoundExceptionInterface|Throwable
      */
     public function test_processServiceDefinitionWithFactoryClosure(): void
     {
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new TestableServiceDefinitionLoaderApplication();
         $factory = function () {
             return 'factory result';
         };
@@ -267,29 +262,27 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
             'factory' => $factory,
             'shared' => true,
         ];
-        $loader->testProcessDefinition('TestService', $definition);
+        $app->exposeProcessServiceDefinition('TestService', $definition);
 
-        $this->assertArrayHasKey('TestService', $loader->bindings);
-        $this->assertSame($factory, $loader->bindings['TestService']['concrete']);
-        $this->assertTrue($loader->bindings['TestService']['shared']);
+        $this->assertTrue($app->has('TestService'));
+        $this->assertSame('factory result', $app->get('TestService'));
     }
 
     /**
-     * @throws EventManagerException|ServiceDefinitionLoaderException
+     * @throws EventManagerException|ServiceDefinitionLoaderException|\Psr\Container\ContainerExceptionInterface|\Psr\Container\NotFoundExceptionInterface|Throwable
      */
     public function test_processServiceDefinitionWithFactoryNonClosure(): void
     {
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new TestableServiceDefinitionLoaderApplication();
 
         $definition = [
             'factory' => [$this, 'dummyFactory'],
             'shared' => false,
         ];
-        $loader->testProcessDefinition('TestService', $definition);
+        $app->exposeProcessServiceDefinition('TestService', $definition);
 
-        $this->assertArrayHasKey('TestService', $loader->bindings);
-        $this->assertInstanceOf(Closure::class, $loader->bindings['TestService']['concrete']);
-        $this->assertFalse($loader->bindings['TestService']['shared']);
+        $this->assertTrue($app->has('TestService'));
+        $this->assertSame('dummy', $app->get('TestService'));
     }
 
     public function dummyFactory(): string
@@ -302,10 +295,10 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
      */
     public function test_processServiceDefinitionCatchBranch(): void
     {
-        $loader = new class() extends DummyServiceDefinitionLoader {
-            protected function bind(
+        $app = new class() extends TestableServiceDefinitionLoaderApplication {
+            public function bind(
                 string $abstract,
-                $concrete,
+                Closure|string|null $concrete = null,
                 bool $shared = false
             ): void {
                 throw new Exception("Forced bind() failure");
@@ -313,12 +306,12 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
         };
 
         $definition = [
-            'concrete' => 'SomeClass',
+            'concrete' => 'stdClass',
         ];
         $this->expectException(ServiceDefinitionLoaderException::class);
         $this->expectExceptionMessage("Failed to process service definition for [TestService]: Forced bind() failure");
 
-        $loader->testProcessDefinition('TestService', $definition);
+        $app->exposeProcessServiceDefinition('TestService', $definition);
     }
 
     /**
@@ -326,7 +319,7 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
      */
     public function test_processServiceDefinitionWithInvalidConcrete(): void
     {
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new TestableServiceDefinitionLoaderApplication();
         $definition = [
             'concrete' => 123,
             'shared' => false,
@@ -334,7 +327,7 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
         $this->expectException(ServiceDefinitionLoaderException::class);
         $this->expectExceptionMessage("Failed to process service definition for [TestService]: The concrete definition for service TestService must be a string or Closure.");
 
-        $loader->testProcessDefinition('TestService', $definition);
+        $app->exposeProcessServiceDefinition('TestService', $definition);
     }
 
     /**
@@ -342,15 +335,15 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
      */
     public function test_processServiceDefinitionWithInvalidTag(): void
     {
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new TestableServiceDefinitionLoaderApplication();
         $definition = [
-            'concrete' => 'SomeClass',
+            'concrete' => 'stdClass',
             'tags' => [123],
         ];
         $this->expectException(ServiceDefinitionLoaderException::class);
         $this->expectExceptionMessage("Failed to process service definition for [TestService]: Invalid tag type for service TestService. Tag must be a string.");
 
-        $loader->testProcessDefinition('TestService', $definition);
+        $app->exposeProcessServiceDefinition('TestService', $definition);
     }
 
     /**
@@ -359,15 +352,30 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
      */
     public function test_processServiceDefinitionWithValidTag(): void
     {
-        $loader = new DummyServiceDefinitionLoader();
+        $app = new TestableServiceDefinitionLoaderApplication();
         $definition = [
-            'concrete' => 'SomeClass',
+            'concrete' => 'stdClass',
             'tags' => ['myTag'],
         ];
-        $loader->testProcessDefinition('TestService', $definition);
+        $app->exposeProcessServiceDefinition('TestService', $definition);
 
-        $this->assertArrayHasKey('myTag', $loader->tags);
-        $this->assertEquals(['TestService'], $loader->tags['myTag']);
+        $this->assertArrayHasKey('TestService', $app->getByTag('myTag'));
+    }
+
+    /**
+     * @param array<int, mixed> $expectedArgs
+     */
+    private function assertEventFiredWithArgs(
+        Application $app,
+        string $event,
+        array $expectedArgs
+    ): void {
+        foreach ($app->getEvents()[$event] ?? [] as $entry) {
+            if ($entry['args'] === $expectedArgs) {
+                return;
+            }
+        }
+        $this->fail(sprintf('Event [%s] with the expected arguments was not fired.', $event));
     }
 }
 
@@ -392,49 +400,21 @@ class FakeFileReader extends FileReader
     }
 }
 
-class DummyServiceDefinitionLoader
+class TestableServiceDefinitionLoaderApplication extends Application
 {
-    use ServiceDefinitionLoaderTrait;
-
-    public array $bindings = [];
-    public array $tags = [];
-    public array $events = [];
-
-    protected function bind(
-        string $abstract,
-        $concrete,
-        bool $shared = false
-    ): void {
-        $this->bindings[$abstract] = ['concrete' => $concrete, 'shared' => $shared];
-    }
-
-    protected function tag(
-        string $tag,
-        array $services
-    ): void {
-        $this->tags[$tag] = $services;
-    }
-
-    protected function fireEvent(
-        string $event,
-        ...$args
-    ): void {
-        $this->events[] = ['event' => $event, 'args' => $args];
-    }
-
-    public function getFileReaderInstance(): FileReader
+    public function exposeGetFileReader(): FileReader
     {
         return $this->getFileReader();
     }
 
     /**
+     * @param array<string, mixed> $definition
      * @throws EventManagerException|ServiceDefinitionLoaderException
      */
-    public function testProcessDefinition(
+    public function exposeProcessServiceDefinition(
         string $abstract,
         array $definition
     ): void {
         $this->processServiceDefinition($abstract, $definition);
     }
-
 }
