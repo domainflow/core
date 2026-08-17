@@ -9,6 +9,10 @@ use DomainFlow\Application\Class\BasicEventDispatcher;
 use DomainFlow\Application\Class\SystemEventStore;
 use DomainFlow\Application\Exception\BootstrappingException;
 use DomainFlow\Service\AbstractServiceProvider;
+use DomainFlow\Service\ApplicationHealthReport;
+use DomainFlow\Service\HealthCheckableInterface;
+use DomainFlow\Service\HealthCheckResult;
+use DomainFlow\Service\HealthStatus;
 use DomainFlow\Service\OrderedServiceProviderInterface;
 use DomainFlow\Service\ServiceProviderInterface;
 use DomainFlow\ServiceProvider\EventDispatcherServiceProvider;
@@ -25,6 +29,8 @@ use Throwable;
 #[CoversClass(BootstrappingException::class)]
 #[CoversClass(EventDispatcherServiceProvider::class)]
 #[CoversClass(SystemEventStore::class)]
+#[CoversClass(ApplicationHealthReport::class)]
+#[CoversClass(HealthCheckResult::class)]
 final class ServiceProviderTraitTest extends TestCase
 {
     /**
@@ -573,6 +579,125 @@ final class ServiceProviderTraitTest extends TestCase
     }
 
     /**
+     * @throws Throwable
+     */
+    public function test_checkProvidersHealthExcludesProvidersNotImplementingTheInterface(): void
+    {
+        $app = new Application();
+        $app->registerProvider(new NonHealthCheckableProvider());
+        $app->boot();
+
+        $report = $app->checkProvidersHealth();
+
+        $this->assertSame([], $report->providers);
+        $this->assertSame(HealthStatus::Healthy, $report->overallStatus, 'No health-checkable providers at all must report an overall healthy status.');
+        $this->assertTrue($report->isHealthy());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_applicationHealthReportIsHealthyReflectsOverallStatus(): void
+    {
+        $app = new Application();
+        $app->registerProvider(new UnhealthyProvider());
+        $app->boot();
+
+        $report = $app->checkProvidersHealth();
+
+        $this->assertFalse($report->isHealthy());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_checkProvidersHealthReflectsIndividualProviderStatusAndReason(): void
+    {
+        $app = new Application();
+        $app->registerProvider(new HealthyProvider());
+        $app->registerProvider(new DegradedProvider());
+        $app->boot();
+
+        $report = $app->checkProvidersHealth();
+
+        $this->assertSame(HealthStatus::Healthy, $report->providers[HealthyProvider::class]->status);
+        $this->assertSame(HealthStatus::Degraded, $report->providers[DegradedProvider::class]->status);
+        $this->assertSame('warming up', $report->providers[DegradedProvider::class]->reason);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_checkProvidersHealthOverallStatusIsUnhealthyIfAnyProviderUnhealthy(): void
+    {
+        $app = new Application();
+        $app->registerProvider(new HealthyProvider());
+        $app->registerProvider(new DegradedProvider());
+        $app->registerProvider(new UnhealthyProvider());
+        $app->boot();
+
+        $report = $app->checkProvidersHealth();
+
+        $this->assertSame(HealthStatus::Unhealthy, $report->overallStatus);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_checkProvidersHealthOverallStatusIsDegradedWhenNoneUnhealthyButSomeDegraded(): void
+    {
+        $app = new Application();
+        $app->registerProvider(new HealthyProvider());
+        $app->registerProvider(new DegradedProvider());
+        $app->boot();
+
+        $report = $app->checkProvidersHealth();
+
+        $this->assertSame(HealthStatus::Degraded, $report->overallStatus);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_checkProvidersHealthReportsNotYetLoadedDeferredProviderWithoutInvokingCheckHealth(): void
+    {
+        $app = new Application();
+        $provider = new DeferredHealthCheckableProvider();
+        $app->registerProvider($provider);
+        $app->boot();
+
+        $report = $app->checkProvidersHealth();
+
+        $entry = $report->providers[DeferredHealthCheckableProvider::class];
+        $this->assertSame(HealthStatus::NotYetLoaded, $entry->status);
+        $this->assertFalse($provider->checkHealthCalled, 'A not-yet-loaded deferred provider must not have its own checkHealth() invoked.');
+        $this->assertSame(
+            HealthStatus::Healthy,
+            $report->overallStatus,
+            'A not-yet-loaded deferred provider must not be conflated with a real health failure in the overall status.'
+        );
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_checkProvidersHealthReportsRealStatusOnceDeferredProviderIsLoaded(): void
+    {
+        $app = new Application();
+        $provider = new DeferredHealthCheckableProvider();
+        $app->registerProvider($provider);
+        $app->boot();
+
+        $app->get('deferred_health_service');
+
+        $report = $app->checkProvidersHealth();
+
+        $entry = $report->providers[DeferredHealthCheckableProvider::class];
+        $this->assertSame(HealthStatus::Healthy, $entry->status);
+        $this->assertTrue($provider->checkHealthCalled);
+    }
+
+    /**
      * @param array<int, mixed> $expectedArgs
      */
     private function assertEventFiredWithArgs(
@@ -1011,5 +1136,146 @@ class DependsOnUnregisteredProvider implements OrderedServiceProviderInterface
     public function dependsOn(): array
     {
         return [SecondDummyProvider::class];
+    }
+}
+
+class NonHealthCheckableProvider implements ServiceProviderInterface
+{
+    public function register(
+        Application $app
+    ): void {
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+}
+
+class HealthyProvider implements ServiceProviderInterface, HealthCheckableInterface
+{
+    public function register(
+        Application $app
+    ): void {
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+
+    public function checkHealth(): HealthCheckResult
+    {
+        return HealthCheckResult::healthy();
+    }
+}
+
+class DegradedProvider implements ServiceProviderInterface, HealthCheckableInterface
+{
+    public function register(
+        Application $app
+    ): void {
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+
+    public function checkHealth(): HealthCheckResult
+    {
+        return HealthCheckResult::degraded('warming up');
+    }
+}
+
+class UnhealthyProvider implements ServiceProviderInterface, HealthCheckableInterface
+{
+    public function register(
+        Application $app
+    ): void {
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+
+    public function checkHealth(): HealthCheckResult
+    {
+        return HealthCheckResult::unhealthy('database unreachable');
+    }
+}
+
+class DeferredHealthCheckableProvider implements ServiceProviderInterface, HealthCheckableInterface
+{
+    public bool $defer = true;
+    public bool $checkHealthCalled = false;
+
+    public function register(
+        Application $app
+    ): void {
+        $app->bind('deferred_health_service', fn () => 'deferred_health_service_value');
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+    }
+
+    public function provides(): array
+    {
+        return ['deferred_health_service'];
+    }
+
+    public function isDeferred(): bool
+    {
+        return $this->defer;
+    }
+
+    public function checkHealth(): HealthCheckResult
+    {
+        $this->checkHealthCalled = true;
+
+        return HealthCheckResult::healthy();
     }
 }
