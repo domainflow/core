@@ -58,7 +58,18 @@ Below is a minimal example demonstrating how to set up an application, register 
 use DomainFlow\Application;
 use DomainFlow\Service\AbstractServiceProvider;
 
-// 1. Define your own service provider.
+// 1. Define the service your provider will register.
+class MyService
+{
+    public function doSomething(): string
+    {
+        return 'done';
+    }
+}
+
+// 2. Define your own service provider. AbstractServiceProvider only requires
+//    register(); boot(), provides(), and isDeferred() already have usable
+//    defaults (isDeferred() reflects $defer below).
 class MyServiceProvider extends AbstractServiceProvider
 {
     protected array $providedServices = [MyService::class];
@@ -71,16 +82,16 @@ class MyServiceProvider extends AbstractServiceProvider
     }
 }
 
-// 2. Create a new application.
+// 3. Create a new application.
 $app = new Application();
 
-// 3. Register your provider.
+// 4. Register your provider.
 $app->registerProvider(new MyServiceProvider());
 
-// 4. Boot the application (register event listeners, run boot callbacks, etc.).
+// 5. Boot the application (register event listeners, run boot callbacks, etc.).
 $app->boot();
 
-// 5. Get your service.
+// 6. Get your service.
 $service = $app->get(MyService::class);
 $service->doSomething();
 ```
