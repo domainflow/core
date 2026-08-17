@@ -6,6 +6,10 @@ namespace DomainFlow\Application\Traits;
 
 use DomainFlow\Application\Exception\BootstrappingException;
 use DomainFlow\Application\Exception\EventManagerException;
+use DomainFlow\Service\ApplicationHealthReport;
+use DomainFlow\Service\HealthCheckableInterface;
+use DomainFlow\Service\HealthCheckResult;
+use DomainFlow\Service\HealthStatus;
 use DomainFlow\Service\OrderedServiceProviderInterface;
 use DomainFlow\Service\ServiceProviderInterface;
 use Psr\Container\ContainerExceptionInterface;
@@ -389,5 +393,63 @@ trait ServiceProviderTrait
         string $providerClass
     ): bool {
         return isset($this->serviceProviders[$providerClass]);
+    }
+
+    /**
+     * Aggregate the health/readiness of every registered provider that
+     * implements HealthCheckableInterface into a single report.
+     *
+     * A provider that does not implement the interface is excluded from
+     * the report entirely, never treated as unhealthy. A deferred provider
+     * that has not been loaded yet is reported as HealthStatus::NotYetLoaded
+     * — without calling its checkHealth() — and never degrades the overall
+     * status, so a provider that may simply never be needed does not read
+     * as a failure on a liveness/readiness endpoint wired to this report.
+     *
+     * @throws Throwable
+     * @return ApplicationHealthReport
+     */
+    public function checkProvidersHealth(): ApplicationHealthReport
+    {
+        $providers = [];
+
+        foreach ($this->serviceProviders as $provider) {
+            if ($provider instanceof HealthCheckableInterface) {
+                $providers[get_class($provider)] = $provider->checkHealth();
+            }
+        }
+
+        foreach ($this->deferredProviderInstances as $class => $provider) {
+            if (isset($this->serviceProviders[$class]) || !($provider instanceof HealthCheckableInterface)) {
+                continue;
+            }
+            $providers[$class] = new HealthCheckResult(
+                HealthStatus::NotYetLoaded,
+                'Deferred provider not yet loaded.'
+            );
+        }
+
+        return new ApplicationHealthReport($this->aggregateProviderHealthStatus($providers), $providers);
+    }
+
+    /**
+     * @param array<string, HealthCheckResult> $providers
+     * @return HealthStatus
+     */
+    private function aggregateProviderHealthStatus(
+        array $providers
+    ): HealthStatus {
+        $overall = HealthStatus::Healthy;
+
+        foreach ($providers as $result) {
+            if ($result->status === HealthStatus::Unhealthy) {
+                return HealthStatus::Unhealthy;
+            }
+            if ($result->status === HealthStatus::Degraded) {
+                $overall = HealthStatus::Degraded;
+            }
+        }
+
+        return $overall;
     }
 }
