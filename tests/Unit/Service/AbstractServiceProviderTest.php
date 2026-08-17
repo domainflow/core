@@ -49,6 +49,19 @@ class AbstractServiceProviderTest extends TestCase
         $provider = new DummyServiceProvider();
         $this->assertFalse($provider->isDeferred());
     }
+
+    public function test_minimalProviderIsInstantiableWithoutOverridingIsDeferred(): void
+    {
+        $provider = new MinimalServiceProvider();
+        $this->assertFalse($provider->isDeferred());
+    }
+
+    public function test_isDeferredReflectsDeferPropertyByDefault(): void
+    {
+        $provider = new MinimalServiceProvider();
+        $provider->defer = true;
+        $this->assertTrue($provider->isDeferred());
+    }
 }
 
 // dummy class
@@ -63,5 +76,16 @@ class DummyServiceProvider extends AbstractServiceProvider
     public function isDeferred(): bool
     {
         return $this->defer;
+    }
+}
+
+// A provider implementing only the abstract register() method, relying on
+// AbstractServiceProvider's default boot()/provides()/isDeferred().
+class MinimalServiceProvider extends AbstractServiceProvider
+{
+    public function register(
+        Application $app
+    ): void {
+        // No-op.
     }
 }

@@ -45,14 +45,4 @@ class EventDispatcherServiceProvider extends AbstractServiceProvider
     ): void {
         // Boot actions if needed.
     }
-
-    /**
-     * Get status of deferred loading.
-     *
-     * @return bool
-     */
-    public function isDeferred(): bool
-    {
-        return $this->defer;
-    }
 }
