@@ -44,7 +44,8 @@ final class EventManagerTraitTest extends TestCase
         $manager = new DummyEventManager();
         $manager->setEventDispatcher($dummyDispatcher);
 
-        $listener = function () {};
+        $listener = function () {
+        };
         $manager->on('test.event', $listener);
 
         $this->assertArrayHasKey('test.event', $dummyDispatcher->listeners);
@@ -60,7 +61,8 @@ final class EventManagerTraitTest extends TestCase
         $manager = new DummyEventManager();
         $manager->setEventDispatcher($dummyDispatcher);
 
-        $listener = function () {};
+        $listener = function () {
+        };
         $manager->once('once.event', $listener);
 
         $this->assertArrayHasKey('once.event', $dummyDispatcher->listeners);
@@ -76,7 +78,8 @@ final class EventManagerTraitTest extends TestCase
         $manager = new DummyEventManager();
         $manager->setEventDispatcher($dummyDispatcher);
 
-        $listener = function () {};
+        $listener = function () {
+        };
         $manager->on('off.event', $listener);
         $manager->off('off.event', $listener);
 
@@ -207,7 +210,8 @@ final class EventManagerTraitTest extends TestCase
 
         $this->assertFalse($manager->hasListeners('nonexistent.event'));
 
-        $manager->on('existent.event', function () {});
+        $manager->on('existent.event', function () {
+        });
 
         $this->assertTrue($manager->hasListeners('existent.event'));
     }
