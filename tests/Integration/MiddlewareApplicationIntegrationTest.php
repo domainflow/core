@@ -29,10 +29,6 @@ class MiddlewareApplicationIntegrationTest extends TestCase
         $this->assertCount(1, $providers);
         $this->assertArrayHasKey(EventDispatcherServiceProvider::class, $providers);
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
         # use middleware helper method and register it
         $myMiddleware = [$this, 'middlewareMethod'];
         $app->useMiddleware($myMiddleware);
@@ -66,10 +62,6 @@ class MiddlewareApplicationIntegrationTest extends TestCase
         # Verify the output
         $this->assertEquals($expectedOutput, $output);
         $this->assertEquals(20, $result['value']);
-
-        # Verify cache still empty since no services were resolved
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
     }
 
     /**

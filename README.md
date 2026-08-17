@@ -4,9 +4,15 @@
 ![Packagist Version](https://img.shields.io/packagist/v/domainflow/core)
 ![PHP Version](https://img.shields.io/packagist/php-v/domainflow/core)
 ![License](https://img.shields.io/github/license/domainflow/core)
-![PHPStan](https://img.shields.io/badge/PHPStan-Level%209-brightgreen.svg)
+![PHPStan](https://img.shields.io/badge/PHPStan-Level%2010-brightgreen.svg)
 
 The **DomainFlow Core** package is a **Lightweight Application Bootstrapper** with features like **Service Providers**, **Application Bootstrapping**, **Middleware**, **Event Management**, and **Configuration Management** to help structure and maintain PHP back-end applications and microservices.
+
+---
+
+## ⚙️ Requirements
+
+- **PHP 8.4 or 8.5**
 
 ---
 
@@ -28,7 +34,7 @@ The **DomainFlow Core** package is a **Lightweight Application Bootstrapper** wi
   Manage environment variables, base paths, and config paths out of the box.
 
 - **Caching**  
-  Optionally cache resolved service instances (and deferred providers) for faster subsequent loads.
+  Optionally persist validated, versioned class-string bindings across processes via `FileContainerCache`, a filesystem-backed adapter for [DomainFlow Container](https://www.github.com/domainflow/container)'s declarative definitions cache (`$app->setExternalCache(new FileContainerCache($path))`). A warm cache hit never skips the boot lifecycle and never re-hydrates a resolved object — only class-string bindings and aliases are restored, and every service is still resolved fresh through the normal container path.
 
 ---
 
@@ -52,7 +58,18 @@ Below is a minimal example demonstrating how to set up an application, register 
 use DomainFlow\Application;
 use DomainFlow\Service\AbstractServiceProvider;
 
-// 1. Define your own service provider.
+// 1. Define the service your provider will register.
+class MyService
+{
+    public function doSomething(): string
+    {
+        return 'done';
+    }
+}
+
+// 2. Define your own service provider. AbstractServiceProvider only requires
+//    register(); boot(), provides(), and isDeferred() already have usable
+//    defaults (isDeferred() reflects $defer below).
 class MyServiceProvider extends AbstractServiceProvider
 {
     protected array $providedServices = [MyService::class];
@@ -65,16 +82,16 @@ class MyServiceProvider extends AbstractServiceProvider
     }
 }
 
-// 2. Create a new application.
+// 3. Create a new application.
 $app = new Application();
 
-// 3. Register your provider.
+// 4. Register your provider.
 $app->registerProvider(new MyServiceProvider());
 
-// 4. Boot the application (register event listeners, run boot callbacks, etc.).
+// 5. Boot the application (register event listeners, run boot callbacks, etc.).
 $app->boot();
 
-// 5. Get your service.
+// 6. Get your service.
 $service = $app->get(MyService::class);
 $service->doSomething();
 ```

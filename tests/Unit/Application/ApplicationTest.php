@@ -11,8 +11,6 @@ use DomainFlow\Application\Exception\PathEnvironmentException;
 use DomainFlow\Application\Interface\EventDispatcherInterface;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
-use ReflectionClass;
-use ReflectionException;
 
 #[CoversClass(Application::class)]
 #[CoversClass(BasicEventDispatcher::class)]
@@ -41,28 +39,14 @@ final class ApplicationTest extends TestCase
         $this->assertEquals($expectedBase . DIRECTORY_SEPARATOR . 'config', $app->configPath());
     }
 
-    /**
-     * @throws ReflectionException
-     */
     public function test_defaultEventDispatcherIsSet(): void
     {
         $app = new TestableApplication();
 
-        $dispatcher = $this->getProtectedProperty($app, 'eventDispatcher');
+        $dispatcher = $app->getEventDispatcher();
 
         $this->assertInstanceOf(EventDispatcherInterface::class, $dispatcher);
         $this->assertInstanceOf(BasicEventDispatcher::class, $dispatcher);
-    }
-
-    /**
-     * @throws ReflectionException
-     */
-    private function getProtectedProperty(object $object, string $property): mixed
-    {
-        $reflection = new ReflectionClass($object);
-        $prop = $reflection->getProperty($property);
-
-        return $prop->getValue($object);
     }
 }
 

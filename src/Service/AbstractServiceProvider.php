@@ -61,4 +61,19 @@ abstract class AbstractServiceProvider implements ServiceProviderInterface
     {
         return $this->providedServices;
     }
+
+    /**
+     * Determine if the provider is deferred.
+     *
+     * Default policy: reflects the public $defer property, so a subclass
+     * only needs to set $defer = true instead of also overriding this
+     * method. Override isDeferred() directly instead if deferred status
+     * must be computed rather than stored as a simple flag.
+     *
+     * @return bool
+     */
+    public function isDeferred(): bool
+    {
+        return $this->defer;
+    }
 }

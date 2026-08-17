@@ -43,10 +43,6 @@ final class DynamicConfigApplicationIntegrationTest extends TestCase
         $providers = $app->getProviders();
         $this->assertArrayHasKey(ConfigServiceProvider::class, $providers);
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
         ob_start();
         $notificationService = $app->get(NotificationService::class);
         $notificationService->notify("New user registered!");
@@ -55,11 +51,6 @@ final class DynamicConfigApplicationIntegrationTest extends TestCase
         # Verify the output
         $expectedOutput = "EmailService: Sending message - Notification: New user registered!\n";
         $this->assertEquals($expectedOutput, $output);
-
-        // Check if resolved services cache is populated
-        $cache = $app->getResolvedServicesCache();
-        $this->assertNotEmpty($cache);
-        $this->assertArrayHasKey(NotificationService::class, $cache);
     }
 
     /**
@@ -75,14 +66,6 @@ final class DynamicConfigApplicationIntegrationTest extends TestCase
         $providers = $app->getProviders();
         $this->assertArrayHasKey(ConfigServiceProvider::class, $providers);
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
         ob_start();
         $emailService = $app->get(EmailService::class);
         $emailService->send("Message from manual execution.");
@@ -92,11 +75,6 @@ final class DynamicConfigApplicationIntegrationTest extends TestCase
         # verify the output
         $expectedOutput = "EmailService: Sending message - Message from manual execution.\n";
         $this->assertEquals($expectedOutput, $output);
-
-        // Check if resolved services cache is populated
-        $cache = $app->getResolvedServicesCache();
-        $this->assertNotEmpty($cache);
-        $this->assertArrayHasKey(EmailService::class, $cache);
     }
 }
 

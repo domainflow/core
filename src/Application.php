@@ -15,7 +15,6 @@ use DomainFlow\Application\Traits\BootstrappingTrait;
 use DomainFlow\Application\Traits\EventManagerTrait;
 use DomainFlow\Application\Traits\MiddlewareTrait;
 use DomainFlow\Application\Traits\PathEnvironmentTrait;
-use DomainFlow\Application\Traits\ResolvedServicesCacheTrait;
 use DomainFlow\Application\Traits\ServiceDefinitionLoaderTrait;
 use DomainFlow\Application\Traits\ServiceProviderTrait;
 use DomainFlow\Application\Traits\TerminationTrait;
@@ -38,7 +37,6 @@ class Application extends Container
     use EventManagerTrait;
     use MiddlewareTrait;
     use ServiceDefinitionLoaderTrait;
-    use ResolvedServicesCacheTrait;
 
     protected const string DEFAULT_FOLDER_NAME_KEY = 'config';
 

@@ -31,10 +31,6 @@ class DependencyInversionApplicationTest extends TestCase
         $providers = $app->getProviders();
         $this->assertArrayHasKey(DatabaseUserServiceProvider::class, $providers);
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
         ob_start();
 
         $userService = $app->get(UserService::class);
@@ -44,12 +40,6 @@ class DependencyInversionApplicationTest extends TestCase
         # Verify the output
         $expectedOutput = "DatabaseLogger: User 'jane_doe' registered successfully.\n";
         $this->assertEquals($expectedOutput, $output);
-
-        // Verify cache is populated
-        $cache = $app->getResolvedServicesCache();
-        $this->assertNotEmpty($cache);
-        $this->assertArrayHasKey(UserService::class, $cache);
-
     }
 
     /**
@@ -68,10 +58,6 @@ class DependencyInversionApplicationTest extends TestCase
         $providers = $app->getProviders();
         $this->assertArrayNotHasKey(FileLoggerUserServiceProvider::class, $providers);
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
         ob_start();
         $userService = $app->get(UserService::class);
         $userService->registerUser('jane_doe');
@@ -84,11 +70,6 @@ class DependencyInversionApplicationTest extends TestCase
         // Verify the output
         $expectedOutput = "FileLogger: User 'jane_doe' registered successfully.\n";
         $this->assertEquals($expectedOutput, $output);
-
-        // Verify cache is populated
-        $cache = $app->getResolvedServicesCache();
-        $this->assertNotEmpty($cache);
-        $this->assertArrayHasKey(UserService::class, $cache);
     }
 }
 

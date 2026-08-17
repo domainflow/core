@@ -27,10 +27,6 @@ class ConsoleServiceApplicationIntegrationTest extends TestCase
         // Check that application boot process completed successfully
         $this->assertTrue($app->isBooted());
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
         // Check if correct provider is registered
         $providers = $app->getProviders();
         $this->assertArrayHasKey(ConsoleServiceProvider::class, $providers);
@@ -39,11 +35,6 @@ class ConsoleServiceApplicationIntegrationTest extends TestCase
 
         # Check the method output
         $this->assertEquals('Hello from ConsoleService!', $service->sayHello());
-
-        # cached services now exist
-        $cache = $app->getResolvedServicesCache();
-        $this->assertNotEmpty($cache);
-        $this->assertArrayHasKey(ConsoleService::class, $cache);
     }
 
 }

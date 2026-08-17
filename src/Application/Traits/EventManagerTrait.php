@@ -33,6 +33,11 @@ trait EventManagerTrait
     /**
      * Set the event dispatcher and fire an event indicating the dispatcher was set.
      *
+     * May be called at any time, including after boot(): EventDispatcherInterface
+     * resolves through the container as a live binding to the Application's
+     * current dispatcher, so a later container resolution always reflects the
+     * dispatcher set here, not a stale boot-time snapshot.
+     *
      * @param EventDispatcherInterface $dispatcher
      * @throws EventManagerException
      * @return void
@@ -42,6 +47,16 @@ trait EventManagerTrait
     ): void {
         $this->eventDispatcher = $dispatcher;
         $this->fireEvent(self::EVENT_EVENT_MANAGER_DISPATCHER_SET_KEY, get_class($dispatcher));
+    }
+
+    /**
+     * Get the currently active event dispatcher.
+     *
+     * @return EventDispatcherInterface
+     */
+    public function getEventDispatcher(): EventDispatcherInterface
+    {
+        return $this->eventDispatcher;
     }
 
     /**

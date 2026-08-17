@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace DomainFlow\Application\Traits;
 
 use Closure;
+use DomainFlow\Application\Class\FileContainerCache;
 use DomainFlow\Application\Class\FileReader;
 use DomainFlow\Application\Exception\EventManagerException;
 use DomainFlow\Application\Exception\ServiceDefinitionLoaderException;
+use DomainFlow\Container\Cache\ContainerCacheInterface;
 use RuntimeException;
 use Symfony\Component\Yaml\Yaml;
 use Throwable;
@@ -90,6 +92,12 @@ trait ServiceDefinitionLoaderTrait
      *
      * Supports PHP, JSON, and YAML (if Symfony YAML component is installed).
      *
+     * A FileContainerCache set via setExternalCache() tracks $file as a
+     * resource for the container's declarative-definitions cache entry: a
+     * later cache read self-invalidates once $file's mtime advances past
+     * what was recorded when this call last persisted it, so a changed
+     * service-definition file is never served from a stale cache.
+     *
      * @param string $file
      * @throws RuntimeException
      * @throws ServiceDefinitionLoaderException
@@ -101,6 +109,9 @@ trait ServiceDefinitionLoaderTrait
     ): void {
         if (!file_exists($file)) {
             throw new RuntimeException("Service definition file not found: $file");
+        }
+        if ($this->externalCache instanceof FileContainerCache) {
+            $this->externalCache->trackResource(ContainerCacheInterface::DEFINITION_CACHE_KEY, $file);
         }
         $definitions = $this->parseDefinitionsFile($file);
         $this->fireEvent(self::EVENT_SERVICE_DEFINITION_FILE_PARSED_KEY, $file);

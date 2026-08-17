@@ -18,31 +18,7 @@ final class CacheExceptionTest extends TestCase
         $previous = new Exception('Write error');
         $exception = CacheException::forWriteFailure($filePath, $previous);
 
-        $this->assertSame("Failed to write resolved services cache to file: $filePath", $exception->getMessage());
-        $this->assertSame(0, $exception->getCode());
-        $this->assertSame($previous, $exception->getPrevious());
-    }
-
-    public function test_forReadFailure(): void
-    {
-        $filePath = '/path/to/cache.file';
-        $previous = new Exception('Read error');
-        $exception = CacheException::forReadFailure($filePath, $previous);
-
-        $this->assertSame("Failed to read resolved services cache file: $filePath", $exception->getMessage());
-        $this->assertSame(0, $exception->getCode());
-        $this->assertSame($previous, $exception->getPrevious());
-    }
-
-    public function test_forUnserializeFailure(): void
-    {
-        $filePath = '/path/to/cache.file';
-        $data = 'invalid serialized data';
-        $previous = new Exception('Unserialize error');
-        $exception = CacheException::forUnserializeFailure($filePath, $data, $previous);
-
-        $expectedMessage = "Failed to unserialize resolved services cache from file: $filePath. Data: $data";
-        $this->assertSame($expectedMessage, $exception->getMessage());
+        $this->assertSame("Failed to write cache to file: $filePath", $exception->getMessage());
         $this->assertSame(0, $exception->getCode());
         $this->assertSame($previous, $exception->getPrevious());
     }

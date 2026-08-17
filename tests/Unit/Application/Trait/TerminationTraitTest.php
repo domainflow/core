@@ -5,15 +5,18 @@ declare(strict_types=1);
 namespace DomainFlow\Tests\Unit\Application\Trait;
 
 use DomainFlow\Application;
+use DomainFlow\Application\Class\BasicEventDispatcher;
+use DomainFlow\Application\Class\SystemEventStore;
 use DomainFlow\Application\Exception\EventManagerException;
 use DomainFlow\Application\Exception\TerminationException;
-use DomainFlow\Application\Traits\TerminationTrait;
 use Exception;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(Application::class)]
 #[CoversClass(TerminationException::class)]
+#[CoversClass(BasicEventDispatcher::class)]
+#[CoversClass(SystemEventStore::class)]
 final class TerminationTraitTest extends TestCase
 {
     /**
@@ -21,11 +24,11 @@ final class TerminationTraitTest extends TestCase
      */
     public function test_terminateWithoutCallbacks(): void
     {
-        $dummy = new DummyTerminationTester();
-        $dummy->terminate();
+        $app = new Application();
+        $app->terminate();
 
-        $events = $dummy->getEvents();
-        $this->assertNotEmpty($events, 'No events were fired.');
+        $events = $this->terminationEvents($app);
+        $this->assertNotEmpty($events, 'No termination events were fired.');
         $this->assertEquals('termination.init', $events[0]['event']);
         $this->assertEquals('termination.complete', end($events)['event']);
     }
@@ -35,14 +38,14 @@ final class TerminationTraitTest extends TestCase
      */
     public function test_terminateWithSuccessfulCallbacks(): void
     {
-        $dummy = new DummyTerminationTester();
-        $dummy->registerTerminationCallback(function () use (&$called) {
+        $app = new Application();
+        $app->registerTerminationCallback(function () use (&$called) {
             $called = true;
         });
-        $dummy->terminate();
+        $app->terminate();
 
         $this->assertTrue($called ?? false, 'Termination callback was not called.');
-        $events = $dummy->getEvents();
+        $events = $this->terminationEvents($app);
         $this->assertEquals('termination.init', $events[0]['event']);
         $this->assertEquals('termination.complete', end($events)['event']);
     }
@@ -52,17 +55,17 @@ final class TerminationTraitTest extends TestCase
      */
     public function test_terminateWithCallbackException(): void
     {
-        $dummy = new DummyTerminationTester();
+        $app = new Application();
         $exceptionMessage = 'Callback failure';
-        $dummy->registerTerminationCallback(function () use ($exceptionMessage) {
+        $app->registerTerminationCallback(function () use ($exceptionMessage) {
             throw new Exception($exceptionMessage);
         });
 
         try {
-            $dummy->terminate();
+            $app->terminate();
             $this->fail('Expected TerminationException was not thrown.');
         } catch (TerminationException $e) {
-            $events = $dummy->getEvents();
+            $events = $this->terminationEvents($app);
             $this->assertEquals('termination.init', $events[0]['event']);
 
             $errorFound = false;
@@ -78,24 +81,26 @@ final class TerminationTraitTest extends TestCase
         }
     }
 
-}
-
-# Dummy class
-class DummyTerminationTester
-{
-    use TerminationTrait;
-
-    public array $events = [];
-
-    protected function fireEvent(
-        string $event,
-        mixed ...$args
-    ): void {
-        $this->events[] = ['event' => $event, 'args' => $args];
-    }
-
-    public function getEvents(): array
+    /**
+     * Flatten Application::getEvents() into chronological order and keep
+     * only the termination.* lifecycle events, ignoring the unrelated
+     * event_manager.dispatcher.set event fired during construction.
+     *
+     * @return list<array{event: string, args: array<int, mixed>}>
+     */
+    private function terminationEvents(Application $app): array
     {
-        return $this->events;
+        $flat = [];
+        foreach ($app->getEvents() as $event => $entries) {
+            if (!str_starts_with($event, 'termination.')) {
+                continue;
+            }
+            foreach ($entries as $entry) {
+                $flat[] = ['event' => $event, 'order' => $entry['order'], 'args' => $entry['args']];
+            }
+        }
+        usort($flat, static fn (array $a, array $b): int => $a['order'] <=> $b['order']);
+
+        return $flat;
     }
 }

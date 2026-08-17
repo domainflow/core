@@ -9,7 +9,6 @@ use DomainFlow\Service\AbstractServiceProvider;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\MockObject\Exception;
 use PHPUnit\Framework\TestCase;
-use ReflectionClass;
 use Throwable;
 
 #[CoversClass(AbstractServiceProvider::class)]
@@ -27,7 +26,7 @@ class AbstractServiceProviderTest extends TestCase
     public function test_registerAndProvides(): void
     {
         $provider = new DummyServiceProvider();
-        $app = $this->createMock(Application::class);
+        $app = $this->createStub(Application::class);
         $provider->register($app);
         $this->assertEquals(['dummy.service'], $provider->provides());
     }
@@ -38,7 +37,7 @@ class AbstractServiceProviderTest extends TestCase
     public function test_bootDoesNothing(): void
     {
         $provider = new DummyServiceProvider();
-        $app = $this->createMock(Application::class);
+        $app = $this->createStub(Application::class);
         $provider->register($app);
         $expected = $provider->provides();
         $provider->boot($app);
@@ -48,9 +47,20 @@ class AbstractServiceProviderTest extends TestCase
     public function test_defaultDeferIsFalse(): void
     {
         $provider = new DummyServiceProvider();
-        $reflection = new ReflectionClass($provider);
-        $deferProperty = $reflection->getProperty('defer');
-        $this->assertFalse($deferProperty->getValue($provider));
+        $this->assertFalse($provider->isDeferred());
+    }
+
+    public function test_minimalProviderIsInstantiableWithoutOverridingIsDeferred(): void
+    {
+        $provider = new MinimalServiceProvider();
+        $this->assertFalse($provider->isDeferred());
+    }
+
+    public function test_isDeferredReflectsDeferPropertyByDefault(): void
+    {
+        $provider = new MinimalServiceProvider();
+        $provider->defer = true;
+        $this->assertTrue($provider->isDeferred());
     }
 }
 
@@ -66,5 +76,16 @@ class DummyServiceProvider extends AbstractServiceProvider
     public function isDeferred(): bool
     {
         return $this->defer;
+    }
+}
+
+// A provider implementing only the abstract register() method, relying on
+// AbstractServiceProvider's default boot()/provides()/isDeferred().
+class MinimalServiceProvider extends AbstractServiceProvider
+{
+    public function register(
+        Application $app
+    ): void {
+        // No-op.
     }
 }

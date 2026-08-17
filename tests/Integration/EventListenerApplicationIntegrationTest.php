@@ -30,10 +30,6 @@ final class EventListenerApplicationIntegrationTest extends TestCase
         $providers = $app->getProviders();
         $this->assertArrayHasKey(MultiEventListenerServiceProvider::class, $providers);
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
         $event = 'user.registered';
         $payload = ['username' => 'john_doe'];
 
@@ -66,12 +62,6 @@ final class EventListenerApplicationIntegrationTest extends TestCase
         $this->assertFalse($app->hasListeners('user.registered'));
         $this->assertFalse($app->hasListeners('user.logged_in'));
 
-        // Check if resolved services cache is populated and contains our listeners
-        $cache = $app->getResolvedServicesCache();
-        $this->assertNotEmpty($cache);
-        $this->assertArrayHasKey(WelcomeEmailListener::class, $cache);
-        $this->assertArrayHasKey(UserRegistrationLogger::class, $cache);
-
         // Since services are non-shared, retrieving them twice should yield different instances
         $listener1 = $app->get(WelcomeEmailListener::class);
         $listener2 = $app->get(WelcomeEmailListener::class);
@@ -97,10 +87,6 @@ final class EventListenerApplicationIntegrationTest extends TestCase
         // Check if correct provider is registered
         $providers = $app->getProviders();
         $this->assertArrayHasKey(MultiEventListenerServiceProvider::class, $providers);
-
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
 
         ob_start();
 
@@ -134,10 +120,6 @@ final class EventListenerApplicationIntegrationTest extends TestCase
         $providers = $app->getProviders();
         $this->assertArrayHasKey(MultiEventListenerServiceProvider::class, $providers);
 
-        // Verify caching
-        $cache = $app->getResolvedServicesCache();
-        $this->assertNotEmpty($cache);
-
         // Verify listeners are registered via tag (using associative array keys)
         $registeredListeners = $app->getByTag('user.registered');
         $this->assertCount(2, $registeredListeners);
@@ -152,10 +134,6 @@ final class EventListenerApplicationIntegrationTest extends TestCase
         // Verify that the container does not keep listeners registered for event dispatching after boot
         $this->assertFalse($app->hasListeners('user.registered'));
         $this->assertFalse($app->hasListeners('user.logged_in'));
-
-        // Verify cache contains listener instances
-        $this->assertArrayHasKey(WelcomeEmailListener::class, $cache);
-        $this->assertArrayHasKey(UserRegistrationLogger::class, $cache);
 
         // Verify getEvents method
         $events = $app->getEvents();

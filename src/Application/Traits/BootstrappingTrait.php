@@ -5,20 +5,16 @@ declare(strict_types=1);
 namespace DomainFlow\Application\Traits;
 
 use DomainFlow\Application\Exception\BootstrappingException;
-use DomainFlow\Application\Exception\CacheException;
-use DomainFlow\Application\Exception\EventManagerException;
 use DomainFlow\Container\Exception\ContainerException;
 use DomainFlow\ServiceProvider\EventDispatcherServiceProvider;
-use Psr\Container\ContainerExceptionInterface;
-use Psr\Container\NotFoundExceptionInterface;
 use Throwable;
 
 trait BootstrappingTrait
 {
-    private const string CACHE_FILE_KEY = 'cache/services.cache';
     protected const string EVENT_BOOTING_KEY = 'booting.init';
     protected const string EVENT_BOOTED_KEY = 'booting.complete';
     protected const string EVENT_BOOTING_ERROR_KEY = 'booting.error';
+    protected const string EVENT_BOOTING_REPEAT_CALL_IGNORED_KEY = 'booting.repeat_call_ignored';
 
     /**
      * Flag indicating whether the application has booted.
@@ -93,7 +89,10 @@ trait BootstrappingTrait
      * Boot the application.
      *
      * Executes booting callbacks, registers and boots all service providers,
-     * loads deferred providers, then executes booted callbacks.
+     * loads deferred providers, then executes booted callbacks. A repeat
+     * call on an already-booted application performs no boot work and fires
+     * EVENT_BOOTING_REPEAT_CALL_IGNORED_KEY instead of EVENT_BOOTING_KEY, so
+     * the audit trail never implies a real boot cycle ran twice.
      *
      * @throws Throwable
      * @return void
@@ -104,22 +103,19 @@ trait BootstrappingTrait
             static::setInstance($this);
         }
 
-        if ($this->bootFromCache()) {
+        if ($this->booted) {
+            $this->fireEvent(self::EVENT_BOOTING_REPEAT_CALL_IGNORED_KEY, $this);
+
             return;
         }
 
         $this->fireEvent(self::EVENT_BOOTING_KEY, $this);
-
-        if ($this->booted) {
-            return;
-        }
 
         try {
             $this->runBootingCallbacks();
             $this->applyAttributeRegistrations();
             $this->registerDefaultServiceProviders();
             $this->registerAndBootProviders();
-            $this->loadDeferredProviders();
             $this->runBootedCallbacks();
             $this->booted = true;
             $this->fireEvent(self::EVENT_BOOTED_KEY, $this);
@@ -127,45 +123,6 @@ trait BootstrappingTrait
             $this->fireEvent(self::EVENT_BOOTING_ERROR_KEY, 'Generic boot error', $e);
             throw BootstrappingException::forGenericError('An error occurred during bootstrapping', $e);
         }
-    }
-
-    /**
-     * Load deferred service providers and cache resolved services.
-     *
-     * @throws ContainerExceptionInterface|NotFoundExceptionInterface|Throwable
-     */
-    public function resolveDeferredServices(): void
-    {
-        foreach ($this->serviceProviders as $provider) {
-            if (!property_exists($provider, 'defer') || !$provider->defer) {
-                foreach ($provider->provides() as $serviceKey) {
-                    if (!$this->has($serviceKey)) {
-                        $instance = $this->get($serviceKey);
-                        $this->resolvedServicesCache[$serviceKey] = $instance;
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Check for a cached services file and load if available.
-     *
-     * @throws EventManagerException|CacheException
-     * @return bool
-     */
-    private function bootFromCache(): bool
-    {
-        $cacheFile = $this->basePath(self::CACHE_FILE_KEY);
-        if ($this->isCachingEnabled() && file_exists($cacheFile)) {
-            $this->loadResolvedServicesFromFile($cacheFile);
-            $this->fireEvent(self::EVENT_BOOTED_KEY, $this);
-            $this->booted = true;
-
-            return true;
-        }
-
-        return false;
     }
 
     /**
@@ -205,21 +162,39 @@ trait BootstrappingTrait
     /**
      * Register and boot all service providers.
      *
+     * A provider already registered (e.g. via registerProvider() before
+     * boot()) is not registered again; a provider already booted is not
+     * booted again. A registration failure aborts boot() without booting
+     * any provider, and a later boot() retry only (re-)attempts providers
+     * that have not yet successfully registered.
+     *
+     * Both passes iterate providers in the order resolved by
+     * orderProvidersForBootstrapping(), which respects declared
+     * OrderedServiceProviderInterface dependencies. Note that register()
+     * already ran immediately at registerProvider() call time for any
+     * provider registered before boot() (see registerProvider()'s eager
+     * path), so declared ordering changes the register pass here only for
+     * a provider added during registerDefaultServiceProviders() above (or
+     * a future direct addition to $serviceProviders); the boot pass is
+     * where a declared dependency reliably takes effect.
+     *
      * @throws Throwable
      * @return void
      */
     private function registerAndBootProviders(): void
     {
-        foreach ($this->serviceProviders as $provider) {
+        $orderedProviders = $this->orderProvidersForBootstrapping();
+
+        foreach ($orderedProviders as $provider) {
             try {
-                $provider->register($this);
+                $this->registerProviderOnce($provider);
             } catch (Throwable $e) {
                 $this->fireEvent(self::EVENT_BOOTING_ERROR_KEY, 'Provider registration error', $e);
                 throw BootstrappingException::forProviderRegistrationFailure(get_class($provider), $e);
             }
         }
-        foreach ($this->serviceProviders as $provider) {
-            $provider->boot($this);
+        foreach ($orderedProviders as $provider) {
+            $this->bootProviderOnce($provider);
         }
     }
 

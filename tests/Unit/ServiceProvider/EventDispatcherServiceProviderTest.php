@@ -13,7 +13,8 @@ use DomainFlow\Application\Interface\EventDispatcherInterface;
 use DomainFlow\ServiceProvider\EventDispatcherServiceProvider;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
-use ReflectionClass;
+use Psr\Container\ContainerExceptionInterface;
+use Psr\Container\NotFoundExceptionInterface;
 
 #[CoversClass(EventDispatcherServiceProvider::class)]
 #[CoversClass(Application::class)]
@@ -21,18 +22,10 @@ use ReflectionClass;
 #[CoversClass(SystemEventStore::class)]
 class EventDispatcherServiceProviderTest extends TestCase
 {
-    private function getEventDispatcher(Application $app): ?object
-    {
-        $reflection = new ReflectionClass($app);
-        $property = $reflection->getProperty('eventDispatcher');
-
-        return $property->getValue($app);
-    }
-
     /**
      * @throws EventManagerException|PathEnvironmentException
      */
-    public function test_registerSetsEventDispatcher(): void
+    public function test_registerDoesNotReplaceTheApplicationsEventDispatcher(): void
     {
         $app = new TestApplication(sys_get_temp_dir());
         $provider = new EventDispatcherServiceProvider();
@@ -41,10 +34,26 @@ class EventDispatcherServiceProviderTest extends TestCase
         $app->setEventDispatcher($dummyDispatcher);
 
         $provider->register($app);
-        $newDispatcher = $this->getEventDispatcher($app);
+        $newDispatcher = $app->getEventDispatcher();
 
         $this->assertInstanceOf(BasicEventDispatcher::class, $newDispatcher);
         $this->assertSame($dummyDispatcher, $newDispatcher);
+    }
+
+    /**
+     * @throws EventManagerException|PathEnvironmentException|NotFoundExceptionInterface|ContainerExceptionInterface
+     */
+    public function test_registerBindsTheApplicationsOwnDispatcherAsEventDispatcherInterface(): void
+    {
+        $app = new TestApplication(sys_get_temp_dir());
+        $provider = new EventDispatcherServiceProvider();
+
+        $dummyDispatcher = new BasicEventDispatcher();
+        $app->setEventDispatcher($dummyDispatcher);
+
+        $provider->register($app);
+
+        $this->assertSame($dummyDispatcher, $app->get(EventDispatcherInterface::class));
     }
 
     /**
@@ -56,10 +65,10 @@ class EventDispatcherServiceProviderTest extends TestCase
         $provider = new EventDispatcherServiceProvider();
 
         $provider->register($app);
-        $dispatcherBeforeBoot = $this->getEventDispatcher($app);
+        $dispatcherBeforeBoot = $app->getEventDispatcher();
 
         $provider->boot($app);
-        $dispatcherAfterBoot = $this->getEventDispatcher($app);
+        $dispatcherAfterBoot = $app->getEventDispatcher();
 
         $this->assertSame($dispatcherBeforeBoot, $dispatcherAfterBoot);
     }
@@ -82,6 +91,26 @@ class EventDispatcherServiceProviderTest extends TestCase
         $provider = new EventDispatcherServiceProvider();
         $provider->defer = true;
         $this->assertTrue($provider->isDeferred());
+    }
+
+    /**
+     * @throws EventManagerException|PathEnvironmentException|NotFoundExceptionInterface|ContainerExceptionInterface
+     */
+    public function test_containerBindingReflectsDispatcherSwappedAfterRegister(): void
+    {
+        $app = new TestApplication(sys_get_temp_dir());
+        $provider = new EventDispatcherServiceProvider();
+
+        $provider->register($app);
+
+        $swapped = new BasicEventDispatcher();
+        $app->setEventDispatcher($swapped);
+
+        $this->assertSame(
+            $swapped,
+            $app->get(EventDispatcherInterface::class),
+            'The container binding must resolve the dispatcher current at resolution time, not the one active at register() time.'
+        );
     }
 }
 
