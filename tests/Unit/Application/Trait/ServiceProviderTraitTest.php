@@ -7,6 +7,7 @@ namespace DomainFlow\Tests\Unit\Application\Trait;
 use DomainFlow\Application;
 use DomainFlow\Application\Class\BasicEventDispatcher;
 use DomainFlow\Application\Class\SystemEventStore;
+use DomainFlow\Application\Exception\BootstrappingException;
 use DomainFlow\Application\Exception\EventManagerException;
 use DomainFlow\Application\Traits\ServiceProviderTrait;
 use DomainFlow\Service\AbstractServiceProvider;
@@ -17,10 +18,12 @@ use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerExceptionInterface;
 use Psr\Container\NotFoundExceptionInterface;
 use ReflectionClass;
+use RuntimeException;
 use Throwable;
 
 #[CoversClass(Application::class)]
 #[CoversClass(BasicEventDispatcher::class)]
+#[CoversClass(BootstrappingException::class)]
 #[CoversClass(EventDispatcherServiceProvider::class)]
 #[CoversClass(SystemEventStore::class)]
 final class ServiceProviderTraitTest extends TestCase
@@ -255,6 +258,104 @@ final class ServiceProviderTraitTest extends TestCase
     /**
      * @throws Throwable
      */
+    public function test_eagerProviderRegisteredBeforeBoot_registersAndBootsExactlyOnce(): void
+    {
+        $app = new Application();
+        $provider = new DummyProvider();
+
+        $app->registerProvider($provider);
+        $app->boot();
+
+        $this->assertSame(1, $provider->registerCallCount);
+        $this->assertSame(1, $provider->bootCallCount);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_eagerProviderRegisteredAfterBoot_registersAndBootsExactlyOnce(): void
+    {
+        $app = new Application();
+        $app->boot();
+
+        $provider = new DummyProvider();
+        $app->registerProvider($provider);
+
+        $this->assertSame(1, $provider->registerCallCount);
+        $this->assertSame(1, $provider->bootCallCount);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_registerProviderCalledTwiceBeforeBoot_registersAndBootsExactlyOnce(): void
+    {
+        $app = new Application();
+        $provider = new DummyProvider();
+
+        $app->registerProvider($provider);
+        $app->registerProvider($provider);
+        $app->boot();
+
+        $this->assertSame(1, $provider->registerCallCount);
+        $this->assertSame(1, $provider->bootCallCount);
+    }
+
+    /**
+     * @throws ContainerExceptionInterface|NotFoundExceptionInterface|Throwable
+     */
+    public function test_deferredProviderLoadedViaGet_registersAndBootsExactlyOnce(): void
+    {
+        CountingDeferredProvider::$registerCallCount = 0;
+        CountingDeferredProvider::$bootCallCount = 0;
+
+        $app = new Application();
+        $app->registerProvider(new CountingDeferredProvider());
+        $app->boot();
+
+        $app->get(CountingDeferredService::class);
+        $app->get(CountingDeferredService::class);
+
+        $this->assertSame(1, CountingDeferredProvider::$registerCallCount);
+        $this->assertSame(1, CountingDeferredProvider::$bootCallCount);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_deferredProviderRegistrationFailure_isWrappedAndRetryableOnNextGet(): void
+    {
+        ThrowingDeferredProvider::$shouldThrow = true;
+        ThrowingDeferredProvider::$registerCallCount = 0;
+        ThrowingDeferredProvider::$bootCallCount = 0;
+
+        $app = new Application();
+        $app->registerProvider(new ThrowingDeferredProvider());
+        $app->boot();
+
+        try {
+            $app->get(ThrowingDeferredService::class);
+            $this->fail('Expected BootstrappingException was not thrown');
+        } catch (BootstrappingException $e) {
+            $this->assertStringContainsString(ThrowingDeferredService::class, $e->getMessage());
+            $this->assertStringContainsString(ThrowingDeferredProvider::class, $e->getMessage());
+            $this->assertNotNull($e->getPrevious());
+        }
+
+        $this->assertSame(1, ThrowingDeferredProvider::$registerCallCount);
+        $this->assertSame(0, ThrowingDeferredProvider::$bootCallCount);
+
+        ThrowingDeferredProvider::$shouldThrow = false;
+        $service = $app->get(ThrowingDeferredService::class);
+
+        $this->assertInstanceOf(ThrowingDeferredService::class, $service);
+        $this->assertSame(2, ThrowingDeferredProvider::$registerCallCount, 'A failed deferred load is retried on the next get().');
+        $this->assertSame(1, ThrowingDeferredProvider::$bootCallCount);
+    }
+
+    /**
+     * @throws Throwable
+     */
     public function test_hasProvider(): void
     {
         $container = new DummyServiceProviderContainerServiceProvider();
@@ -327,6 +428,9 @@ class DummyProvider implements ServiceProviderInterface
 {
     public bool $registered = false;
     public bool $bootedCalled = false;
+    public int $registerCallCount = 0;
+    public int $bootCallCount = 0;
+    public bool $throwOnRegister = false;
     private array $provides;
     public bool $defer = false;
 
@@ -341,6 +445,12 @@ class DummyProvider implements ServiceProviderInterface
     public function register(
         $app
     ): void {
+        $this->registerCallCount++;
+
+        if ($this->throwOnRegister) {
+            throw new RuntimeException('Simulated provider registration failure');
+        }
+
         $this->registered = true;
 
         foreach ($this->provides as $service) {
@@ -355,6 +465,7 @@ class DummyProvider implements ServiceProviderInterface
     public function boot(
         $app
     ): void {
+        $this->bootCallCount++;
         $this->bootedCalled = true;
     }
 
@@ -391,6 +502,72 @@ class ConsoleServiceProvider extends AbstractServiceProvider
         Application $app
     ): void {
         echo "ConsoleServiceProvider booted.\n";
+    }
+
+    public function isDeferred(): bool
+    {
+        return $this->defer;
+    }
+}
+
+class CountingDeferredService
+{
+}
+
+class ThrowingDeferredService
+{
+}
+
+class ThrowingDeferredProvider extends AbstractServiceProvider
+{
+    public static bool $shouldThrow = true;
+    public static int $registerCallCount = 0;
+    public static int $bootCallCount = 0;
+    protected array $providedServices = [ThrowingDeferredService::class];
+    public bool $defer = true;
+
+    public function register(
+        Application $app
+    ): void {
+        self::$registerCallCount++;
+
+        if (self::$shouldThrow) {
+            throw new RuntimeException('Simulated deferred provider registration failure');
+        }
+
+        $app->bind(ThrowingDeferredService::class, fn () => new ThrowingDeferredService(), true);
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+        self::$bootCallCount++;
+    }
+
+    public function isDeferred(): bool
+    {
+        return $this->defer;
+    }
+}
+
+class CountingDeferredProvider extends AbstractServiceProvider
+{
+    public static int $registerCallCount = 0;
+    public static int $bootCallCount = 0;
+    protected array $providedServices = [CountingDeferredService::class];
+    public bool $defer = true;
+
+    public function register(
+        Application $app
+    ): void {
+        self::$registerCallCount++;
+        $app->bind(CountingDeferredService::class, fn () => new CountingDeferredService(), true);
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+        self::$bootCallCount++;
     }
 
     public function isDeferred(): bool
