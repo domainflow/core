@@ -23,14 +23,43 @@ use RuntimeException;
  * version, or an unreadable file is always treated as a cache miss rather
  * than trusted: a corrupted or tampered cache file costs a cold rebuild,
  * never a wrong resolution.
+ *
+ * A caller may opt a key into resource-tracked invalidation via
+ * trackResource(): the next set() for that key records the tracked file's
+ * mtime alongside the value, and a later get()/has() treats the entry as a
+ * miss once any tracked file's mtime has advanced past what was recorded —
+ * comparable to Symfony's ConfigCache::isFresh(). A key nothing was tracked
+ * for is entirely unaffected and behaves exactly as before.
  */
 final class FileContainerCache implements ContainerCacheInterface
 {
     private const int FORMAT_VERSION = 1;
 
+    /**
+     * @var array<string, array<string, true>>
+     */
+    private array $trackedResources = [];
+
     public function __construct(
         private readonly string $filePath
     ) {
+    }
+
+    /**
+     * Track a source file for a cache key. The next set() for that key
+     * records the file's current mtime alongside the value; a later
+     * get()/has() for that key treats the entry as a miss once the file's
+     * mtime has advanced past what was recorded, or the file is gone.
+     *
+     * @param string $key
+     * @param string $resourceFile
+     * @return void
+     */
+    public function trackResource(
+        string $key,
+        string $resourceFile
+    ): void {
+        $this->trackedResources[$key][$resourceFile] = true;
     }
 
     /**
@@ -68,13 +97,36 @@ final class FileContainerCache implements ContainerCacheInterface
         int $ttl = 3600
     ): bool {
         $store = $this->readStore();
-        $store[$key] = [
+        $entry = [
             'value' => $value,
             'expiresAt' => $ttl > 0 ? time() + $ttl : null,
         ];
+        $resources = $this->currentResourceMtimes($key);
+        if ($resources !== []) {
+            $entry['resources'] = $resources;
+        }
+        $store[$key] = $entry;
         $this->writeStore($store);
 
         return true;
+    }
+
+    /**
+     * @param string $key
+     * @return array<string, int>
+     */
+    private function currentResourceMtimes(
+        string $key
+    ): array {
+        $mtimes = [];
+        foreach (array_keys($this->trackedResources[$key] ?? []) as $file) {
+            $mtime = @filemtime($file);
+            if ($mtime !== false) {
+                $mtimes[$file] = $mtime;
+            }
+        }
+
+        return $mtimes;
     }
 
     /**
@@ -118,7 +170,27 @@ final class FileContainerCache implements ContainerCacheInterface
             return ['found' => false, 'value' => null];
         }
 
+        if (isset($entry['resources']) && !$this->resourcesAreFresh($entry['resources'])) {
+            return ['found' => false, 'value' => null];
+        }
+
         return ['found' => true, 'value' => $entry['value']];
+    }
+
+    /**
+     * @param array<string, int> $resources
+     */
+    private function resourcesAreFresh(
+        array $resources
+    ): bool {
+        foreach ($resources as $file => $recordedMtime) {
+            $currentMtime = @filemtime($file);
+            if ($currentMtime === false || $currentMtime > $recordedMtime) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -126,7 +198,7 @@ final class FileContainerCache implements ContainerCacheInterface
      * unexpected shape, or format-version mismatch is treated as an empty
      * store — never trusted, never fatal.
      *
-     * @return array<string, array{value: mixed, expiresAt: int|null}>
+     * @return array<string, array{value: mixed, expiresAt: int|null, resources?: array<string, int>}>
      */
     private function readStore(): array
     {
@@ -149,7 +221,7 @@ final class FileContainerCache implements ContainerCacheInterface
             return [];
         }
 
-        /** @var array{version: int, entries: array<string, array{value: mixed, expiresAt: int|null}>} $decoded */
+        /** @var array{version: int, entries: array<string, array{value: mixed, expiresAt: int|null, resources?: array<string, int>}>} $decoded */
         return $decoded['entries'];
     }
 
@@ -170,14 +242,7 @@ final class FileContainerCache implements ContainerCacheInterface
         }
 
         foreach ($decoded['entries'] as $key => $entry) {
-            if (!is_string($key)
-                || !is_array($entry)
-                || array_diff(array_keys($entry), ['value', 'expiresAt']) !== []
-                || count($entry) !== 2
-                || !array_key_exists('value', $entry)
-                || !array_key_exists('expiresAt', $entry)
-                || !(is_int($entry['expiresAt']) || $entry['expiresAt'] === null)
-            ) {
+            if (!is_string($key) || !$this->isValidEntry($entry)) {
                 return false;
             }
         }
@@ -186,7 +251,48 @@ final class FileContainerCache implements ContainerCacheInterface
     }
 
     /**
-     * @param array<string, array{value: mixed, expiresAt: int|null}> $store
+     * @param mixed $entry
+     */
+    private function isValidEntry(
+        mixed $entry
+    ): bool {
+        if (!is_array($entry)
+            || array_diff(array_keys($entry), ['value', 'expiresAt', 'resources']) !== []
+            || !array_key_exists('value', $entry)
+            || !array_key_exists('expiresAt', $entry)
+            || !(is_int($entry['expiresAt']) || $entry['expiresAt'] === null)
+        ) {
+            return false;
+        }
+
+        if (!array_key_exists('resources', $entry)) {
+            return count($entry) === 2;
+        }
+
+        return count($entry) === 3 && $this->isValidResources($entry['resources']);
+    }
+
+    /**
+     * @param mixed $resources
+     */
+    private function isValidResources(
+        mixed $resources
+    ): bool {
+        if (!is_array($resources)) {
+            return false;
+        }
+
+        foreach ($resources as $file => $mtime) {
+            if (!is_string($file) || $file === '' || !is_int($mtime)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param array<string, array{value: mixed, expiresAt: int|null, resources?: array<string, int>}> $store
      * @throws CacheException
      */
     private function writeStore(

@@ -132,6 +132,64 @@ class ServiceCachingApplicationIntegrationTest extends TestCase
         $this->assertTrue($app->isBooted());
         $this->assertInstanceOf(CachedService::class, $app->get(CachedService::class));
     }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_cache_populated_from_a_service_definition_file_stays_a_hit_while_the_file_is_unchanged(): void
+    {
+        $definitionsFile = $this->tempDefinitionsFile();
+        file_put_contents($definitionsFile, '<?php return ["TestService" => ["concrete" => "stdClass", "shared" => true]];');
+
+        $app1 = new Application(__DIR__);
+        $app1->setExternalCache(new FileContainerCache($this->cacheFile));
+        $app1->loadServiceDefinitions($definitionsFile);
+
+        $app2 = new Application(__DIR__);
+        $app2->setExternalCache(new FileContainerCache($this->cacheFile));
+
+        $this->assertTrue(
+            $app2->has('TestService'),
+            'A warm Application must restore bindings from a cache whose tracked service-definition file has not changed.'
+        );
+
+        unlink($definitionsFile);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_cache_populated_from_a_service_definition_file_self_invalidates_once_the_file_changes(): void
+    {
+        $definitionsFile = $this->tempDefinitionsFile();
+        file_put_contents($definitionsFile, '<?php return ["TestService" => ["concrete" => "stdClass", "shared" => true]];');
+
+        $app1 = new Application(__DIR__);
+        $app1->setExternalCache(new FileContainerCache($this->cacheFile));
+        $app1->loadServiceDefinitions($definitionsFile);
+
+        touch($definitionsFile, time() + 100);
+
+        $app2 = new Application(__DIR__);
+        $app2->setExternalCache(new FileContainerCache($this->cacheFile));
+
+        $this->assertFalse(
+            $app2->has('TestService'),
+            'A changed service-definition file must self-invalidate the cache instead of silently serving a stale binding.'
+        );
+
+        unlink($definitionsFile);
+    }
+
+    private function tempDefinitionsFile(): string
+    {
+        $dir = dirname($this->cacheFile);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0777, true);
+        }
+
+        return $dir . DIRECTORY_SEPARATOR . 'services.php';
+    }
 }
 
 # Dummy classes
