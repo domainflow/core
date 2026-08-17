@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DomainFlow\Application\Traits;
 
+use DomainFlow\Application\Exception\BootstrappingException;
 use DomainFlow\Application\Exception\EventManagerException;
 use DomainFlow\Service\ServiceProviderInterface;
 use Psr\Container\ContainerExceptionInterface;
@@ -41,7 +42,20 @@ trait ServiceProviderTrait
     protected array $deferredServices = [];
 
     /**
+     * Provider classes whose boot() has already run.
+     *
+     * Format: [ provider class name => true ]
+     *
+     * @var array<string, true>
+     */
+    protected array $bootedProviders = [];
+
+    /**
      * Register a service provider with the application.
+     *
+     * A given provider class is registered at most once. An eager provider
+     * registers immediately; a deferred provider only registers once one of
+     * its provided service identifiers is first requested through get().
      *
      * @param ServiceProviderInterface $provider
      * @throws Throwable
@@ -62,14 +76,14 @@ trait ServiceProviderTrait
             foreach ($provider->provides() as $serviceKey) {
                 $this->deferredServices[$serviceKey] = $class;
             }
-        } else {
-            // Immediately register non-deferred providers
-            $provider->register($this);
-            $this->serviceProviders[$class] = $provider;
-            $this->fireEvent(self::EVENT_PROVIDER_REGISTERED_KEY, $class);
+
+            return;
         }
+
+        $this->registerProviderOnce($provider);
+
         if ($this->booted) {
-            $provider->boot($this);
+            $this->bootProviderOnce($provider);
         }
     }
 
@@ -83,9 +97,7 @@ trait ServiceProviderTrait
     public function unregisterProvider(
         string $providerClass
     ): void {
-        if (isset($this->serviceProviders[$providerClass])) {
-            unset($this->serviceProviders[$providerClass]);
-        }
+        unset($this->serviceProviders[$providerClass], $this->bootedProviders[$providerClass]);
 
         // Remove deferred services tied to this provider
         foreach ($this->deferredServices as $serviceKey => $storedProvider) {
@@ -95,6 +107,45 @@ trait ServiceProviderTrait
         }
 
         $this->fireEvent(self::EVENT_PROVIDER_UNREGISTERED_KEY, $providerClass);
+    }
+
+    /**
+     * Call register() on a provider exactly once for its class.
+     *
+     * @throws Throwable
+     * @return void
+     */
+    private function registerProviderOnce(
+        ServiceProviderInterface $provider
+    ): void {
+        $class = get_class($provider);
+
+        if (isset($this->serviceProviders[$class])) {
+            return;
+        }
+
+        $provider->register($this);
+        $this->serviceProviders[$class] = $provider;
+        $this->fireEvent(self::EVENT_PROVIDER_REGISTERED_KEY, $class);
+    }
+
+    /**
+     * Call boot() on a registered provider exactly once for its class.
+     *
+     * @throws Throwable
+     * @return void
+     */
+    private function bootProviderOnce(
+        ServiceProviderInterface $provider
+    ): void {
+        $class = get_class($provider);
+
+        if (!isset($this->serviceProviders[$class]) || isset($this->bootedProviders[$class])) {
+            return;
+        }
+
+        $provider->boot($this);
+        $this->bootedProviders[$class] = true;
     }
 
     /**
@@ -117,21 +168,41 @@ trait ServiceProviderTrait
     {
         foreach ($this->deferredServices as $serviceKey => $providerClass) {
             if (!$this->has($serviceKey)) {
-                if (!$this->hasProvider($providerClass)) {
-                    /** @var ServiceProviderInterface $provider */
-                    $provider = new $providerClass();
-                    $provider->register($this);
-                    $this->serviceProviders[$providerClass] = $provider;
-                    $this->fireEvent(self::EVENT_PROVIDER_REGISTERED_KEY, $providerClass);
-                }
-
-                $this->fireEvent(self::EVENT_PROVIDER_DEFERRED_LOADED_KEY, $serviceKey, $providerClass);
-
-                unset($this->deferredServices[$serviceKey]);
-
-                $this->fireEvent(self::EVENT_PROVIDER_DEFERRED_REMOVED_KEY, $serviceKey, $providerClass);
+                $this->resolveDeferredProvider($serviceKey, $providerClass);
             }
         }
+    }
+
+    /**
+     * Register and boot the provider for a deferred service key exactly
+     * once, then remove that key from the deferred map.
+     *
+     * @param string $serviceKey
+     * @param string $providerClass
+     * @throws BootstrappingException|Throwable
+     * @return void
+     */
+    private function resolveDeferredProvider(
+        string $serviceKey,
+        string $providerClass
+    ): void {
+        if (!isset($this->serviceProviders[$providerClass])) {
+            /** @var ServiceProviderInterface $provider */
+            $provider = new $providerClass();
+
+            try {
+                $this->registerProviderOnce($provider);
+                $this->bootProviderOnce($provider);
+            } catch (Throwable $e) {
+                throw BootstrappingException::forDeferredProviderLoadError($serviceKey, $providerClass, $e);
+            }
+        }
+
+        $this->fireEvent(self::EVENT_PROVIDER_DEFERRED_LOADED_KEY, $serviceKey, $providerClass);
+
+        unset($this->deferredServices[$serviceKey]);
+
+        $this->fireEvent(self::EVENT_PROVIDER_DEFERRED_REMOVED_KEY, $serviceKey, $providerClass);
     }
 
     /**
@@ -145,21 +216,7 @@ trait ServiceProviderTrait
         string $id
     ): mixed {
         if (isset($this->deferredServices[$id])) {
-            $providerClass = $this->deferredServices[$id];
-
-            if (!$this->hasProvider($providerClass)) {
-                /** @var ServiceProviderInterface $provider */
-                $provider = new $providerClass();
-                $provider->register($this);
-                // Ensure the provider is moved to serviceProviders
-                $this->serviceProviders[$providerClass] = $provider;
-            }
-
-            // Fire the deferred-loaded event
-            $this->fireEvent(self::EVENT_PROVIDER_DEFERRED_LOADED_KEY, $id, $providerClass);
-
-            // Remove from deferred list
-            unset($this->deferredServices[$id]);
+            $this->resolveDeferredProvider($id, $this->deferredServices[$id]);
         }
 
         $value = parent::get($id);

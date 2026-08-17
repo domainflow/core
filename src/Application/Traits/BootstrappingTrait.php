@@ -204,6 +204,12 @@ trait BootstrappingTrait
     /**
      * Register and boot all service providers.
      *
+     * A provider already registered (e.g. via registerProvider() before
+     * boot()) is not registered again; a provider already booted is not
+     * booted again. A registration failure aborts boot() without booting
+     * any provider, and a later boot() retry only (re-)attempts providers
+     * that have not yet successfully registered.
+     *
      * @throws Throwable
      * @return void
      */
@@ -211,14 +217,14 @@ trait BootstrappingTrait
     {
         foreach ($this->serviceProviders as $provider) {
             try {
-                $provider->register($this);
+                $this->registerProviderOnce($provider);
             } catch (Throwable $e) {
                 $this->fireEvent(self::EVENT_BOOTING_ERROR_KEY, 'Provider registration error', $e);
                 throw BootstrappingException::forProviderRegistrationFailure(get_class($provider), $e);
             }
         }
         foreach ($this->serviceProviders as $provider) {
-            $provider->boot($this);
+            $this->bootProviderOnce($provider);
         }
     }
 

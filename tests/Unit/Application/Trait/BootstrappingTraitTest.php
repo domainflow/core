@@ -8,6 +8,7 @@ use DomainFlow\Application;
 use DomainFlow\Application\Attributes\EventListener;
 use DomainFlow\Application\Exception\BootstrappingException;
 use DomainFlow\Container\Exception\ContainerException;
+use DomainFlow\Service\ServiceProviderInterface;
 use DomainFlow\ServiceProvider\EventDispatcherServiceProvider;
 use Exception;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -134,6 +135,48 @@ final class BootstrappingTraitTest extends TestCase
                 $prev->getMessage()
             );
         }
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_boot_retry_after_provider_registration_failure_does_not_reregister_succeeded_providers(): void
+    {
+        $app = new DummyApplication();
+        $app->cachingEnabled = false;
+        $app->basePathReturn = 'non_existent_file';
+
+        $succeeding = new DummyCountingProvider();
+        $failing = new DummyProviderThrows();
+
+        $app->serviceProviders[] = $succeeding;
+        $app->serviceProviders[] = $failing;
+
+        try {
+            $app->boot();
+            $this->fail('Expected BootstrappingException was not thrown');
+        } catch (BootstrappingException) {
+            // expected
+        }
+
+        $this->assertSame(1, $succeeding->registerCallCount);
+        $this->assertSame(0, $succeeding->bootCallCount, 'A later provider failure must not boot an already-registered provider.');
+        $this->assertSame(1, $failing->registerCallCount);
+        $this->assertFalse($app->booted);
+
+        $failing->shouldThrow = false;
+        $app->events = [];
+        $app->boot();
+
+        $this->assertSame(
+            1,
+            $succeeding->registerCallCount,
+            'Already-registered provider must not register again on retry.'
+        );
+        $this->assertSame(1, $succeeding->bootCallCount);
+        $this->assertSame(2, $failing->registerCallCount, 'Previously failed provider is retried on the next boot().');
+        $this->assertSame(1, $failing->bootCallCount);
+        $this->assertTrue($app->booted);
     }
 
     /**
@@ -325,20 +368,67 @@ class DummyApplication extends Application
     }
 }
 
-class DummyProviderThrows
+class DummyProviderThrows implements ServiceProviderInterface
 {
+    public bool $shouldThrow = true;
+    public int $registerCallCount = 0;
+    public int $bootCallCount = 0;
+
     /**
      * @throws Exception
      */
     public function register(
         Application $app
     ): void {
-        throw new Exception('Provider registration error');
+        $this->registerCallCount++;
+
+        if ($this->shouldThrow) {
+            throw new Exception('Provider registration error');
+        }
     }
 
     public function boot(
         Application $app
     ): void {
+        $this->bootCallCount++;
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
+    }
+}
+
+class DummyCountingProvider implements ServiceProviderInterface
+{
+    public int $registerCallCount = 0;
+    public int $bootCallCount = 0;
+
+    public function register(
+        Application $app
+    ): void {
+        $this->registerCallCount++;
+    }
+
+    public function boot(
+        Application $app
+    ): void {
+        $this->bootCallCount++;
+    }
+
+    public function provides(): array
+    {
+        return [];
+    }
+
+    public function isDeferred(): bool
+    {
+        return false;
     }
 }
 
