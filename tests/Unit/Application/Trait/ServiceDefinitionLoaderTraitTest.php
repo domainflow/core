@@ -7,10 +7,12 @@ namespace DomainFlow\Tests\Unit\Application\Trait;
 use Closure;
 use DomainFlow\Application;
 use DomainFlow\Application\Class\BasicEventDispatcher;
+use DomainFlow\Application\Class\FileContainerCache;
 use DomainFlow\Application\Class\FileReader;
 use DomainFlow\Application\Class\SystemEventStore;
 use DomainFlow\Application\Exception\EventManagerException;
 use DomainFlow\Application\Exception\ServiceDefinitionLoaderException;
+use DomainFlow\Container\Cache\ContainerCacheInterface;
 use Exception;
 use org\bovigo\vfs\vfsStream;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -24,6 +26,7 @@ use Throwable;
 #[CoversClass(ServiceDefinitionLoaderException::class)]
 #[CoversClass(BasicEventDispatcher::class)]
 #[CoversClass(SystemEventStore::class)]
+#[CoversClass(FileContainerCache::class)]
 final class ServiceDefinitionLoaderTraitTest extends TestCase
 {
     private string $tempDir;
@@ -188,6 +191,28 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
         $this->expectExceptionMessage("Unsupported file extension: txt");
 
         $app->loadServiceDefinitions($file);
+    }
+
+    /**
+     * @throws EventManagerException|ServiceDefinitionLoaderException|\Psr\Container\ContainerExceptionInterface|\Psr\Container\NotFoundExceptionInterface|Throwable
+     */
+    public function test_loadServiceDefinitionsTracksTheFileOnAFileContainerCacheExternalCache(): void
+    {
+        $file = $this->tempDir . DIRECTORY_SEPARATOR . 'services.php';
+        file_put_contents($file, '<?php return ["TestService" => ["concrete" => "stdClass", "shared" => true]];');
+
+        $cacheFile = $this->tempDir . DIRECTORY_SEPARATOR . 'definitions.cache';
+        $app = new Application();
+        $app->setExternalCache(new FileContainerCache($cacheFile));
+
+        $app->loadServiceDefinitions($file);
+
+        $cacheContent = json_decode((string) file_get_contents($cacheFile), true);
+        $resources = $cacheContent['entries'][ContainerCacheInterface::DEFINITION_CACHE_KEY]['resources'] ?? null;
+
+        $this->assertIsArray($resources, 'loadServiceDefinitions() must track $file as a resource on a FileContainerCache external cache.');
+        $this->assertArrayHasKey($file, $resources);
+        $this->assertSame(filemtime($file), $resources[$file]);
     }
 
     public function test_getFileReaderInitializesFileReader(): void

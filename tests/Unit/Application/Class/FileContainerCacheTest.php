@@ -367,4 +367,165 @@ final class FileContainerCacheTest extends TestCase
 
         $this->assertFileDoesNotExist($this->file);
     }
+
+    /**
+     * @throws CacheException
+     */
+    public function test_tracked_resource_unchanged_since_write_is_still_a_hit(): void
+    {
+        $resourceFile = $this->tempDir . DIRECTORY_SEPARATOR . 'services.yaml';
+        mkdir($this->tempDir, 0755, true);
+        file_put_contents($resourceFile, 'unchanged');
+        touch($resourceFile, time() - 100);
+
+        $cache = new FileContainerCache($this->file);
+        $cache->trackResource('key1', $resourceFile);
+        $cache->set('key1', ['a' => 1], 0);
+
+        $this->assertTrue($cache->has('key1'));
+        $this->assertSame(['a' => 1], $cache->get('key1'));
+    }
+
+    /**
+     * @throws CacheException
+     */
+    public function test_tracked_resource_modified_after_write_is_treated_as_a_miss(): void
+    {
+        $resourceFile = $this->tempDir . DIRECTORY_SEPARATOR . 'services.yaml';
+        mkdir($this->tempDir, 0755, true);
+        file_put_contents($resourceFile, 'original');
+        touch($resourceFile, time() - 100);
+
+        $cache = new FileContainerCache($this->file);
+        $cache->trackResource('key1', $resourceFile);
+        $cache->set('key1', ['a' => 1], 0);
+
+        touch($resourceFile, time() + 100);
+
+        $this->assertFalse($cache->has('key1'));
+        $this->assertNull($cache->get('key1'));
+    }
+
+    /**
+     * @throws CacheException
+     */
+    public function test_tracked_resource_removed_after_write_is_treated_as_a_miss(): void
+    {
+        $resourceFile = $this->tempDir . DIRECTORY_SEPARATOR . 'services.yaml';
+        mkdir($this->tempDir, 0755, true);
+        file_put_contents($resourceFile, 'original');
+
+        $cache = new FileContainerCache($this->file);
+        $cache->trackResource('key1', $resourceFile);
+        $cache->set('key1', ['a' => 1], 0);
+
+        unlink($resourceFile);
+
+        $this->assertFalse($cache->has('key1'));
+        $this->assertNull($cache->get('key1'));
+    }
+
+    /**
+     * @throws CacheException
+     */
+    public function test_untracked_key_is_unaffected_by_a_changed_file_tracked_for_another_key(): void
+    {
+        $resourceFile = $this->tempDir . DIRECTORY_SEPARATOR . 'services.yaml';
+        mkdir($this->tempDir, 0755, true);
+        file_put_contents($resourceFile, 'original');
+        touch($resourceFile, time() - 100);
+
+        $cache = new FileContainerCache($this->file);
+        $cache->trackResource('key1', $resourceFile);
+        $cache->set('key1', ['a' => 1], 0);
+        $cache->set('key2', ['b' => 2], 0);
+
+        touch($resourceFile, time() + 100);
+
+        $this->assertFalse($cache->has('key1'), 'The entry a resource was tracked for must invalidate.');
+        $this->assertTrue($cache->has('key2'), 'An entry with no tracked resource must be unaffected.');
+        $this->assertSame(['b' => 2], $cache->get('key2'));
+    }
+
+    /**
+     * @throws CacheException
+     */
+    public function test_trackResource_for_a_file_that_never_existed_does_not_prevent_a_hit(): void
+    {
+        $resourceFile = $this->tempDir . DIRECTORY_SEPARATOR . 'never-existed.yaml';
+
+        $cache = new FileContainerCache($this->file);
+        $cache->trackResource('key1', $resourceFile);
+        $cache->set('key1', ['a' => 1], 0);
+
+        $this->assertTrue($cache->has('key1'), 'A resource that never existed at write time is not tracked, so it cannot cause a false miss.');
+    }
+
+    /**
+     * @throws CacheException
+     */
+    public function test_entry_with_tampered_resources_shape_is_treated_as_a_miss(): void
+    {
+        mkdir(dirname($this->file), 0777, true);
+        file_put_contents($this->file, json_encode([
+            'version' => 1,
+            'entries' => [
+                'key1' => [
+                    'value' => ['a' => 1],
+                    'expiresAt' => null,
+                    'resources' => ['not-an-int-mtime'],
+                ],
+            ],
+        ]));
+
+        $cache = new FileContainerCache($this->file);
+
+        $this->assertFalse($cache->has('key1'));
+        $this->assertNull($cache->get('key1'));
+    }
+
+    /**
+     * @throws CacheException
+     */
+    public function test_entry_with_non_array_resources_is_treated_as_a_miss(): void
+    {
+        mkdir(dirname($this->file), 0777, true);
+        file_put_contents($this->file, json_encode([
+            'version' => 1,
+            'entries' => [
+                'key1' => [
+                    'value' => ['a' => 1],
+                    'expiresAt' => null,
+                    'resources' => 'not-an-array',
+                ],
+            ],
+        ]));
+
+        $cache = new FileContainerCache($this->file);
+
+        $this->assertFalse($cache->has('key1'));
+    }
+
+    /**
+     * @throws CacheException
+     */
+    public function test_entry_with_unexpected_field_alongside_resources_is_treated_as_a_miss(): void
+    {
+        mkdir(dirname($this->file), 0777, true);
+        file_put_contents($this->file, json_encode([
+            'version' => 1,
+            'entries' => [
+                'key1' => [
+                    'value' => ['a' => 1],
+                    'expiresAt' => null,
+                    'resources' => [],
+                    'unexpected' => 'field',
+                ],
+            ],
+        ]));
+
+        $cache = new FileContainerCache($this->file);
+
+        $this->assertFalse($cache->has('key1'));
+    }
 }
