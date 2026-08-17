@@ -96,6 +96,27 @@ final class FileContainerCacheTest extends TestCase
     /**
      * @throws CacheException
      */
+    public function test_set_creates_directory_with_restrictive_permissions(): void
+    {
+        if (DIRECTORY_SEPARATOR === '\\') {
+            $this->markTestSkipped('POSIX permissions are not applicable on Windows.');
+        }
+
+        $previousUmask = umask(0);
+        try {
+            $cache = new FileContainerCache($this->file);
+            $cache->set('key1', ['a' => 1], 0);
+        } finally {
+            umask($previousUmask);
+        }
+
+        $permissions = fileperms(dirname($this->file)) & 0777;
+        $this->assertSame(0755, $permissions);
+    }
+
+    /**
+     * @throws CacheException
+     */
     public function test_set_writes_file_with_restrictive_permissions(): void
     {
         if (DIRECTORY_SEPARATOR === '\\') {
