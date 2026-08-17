@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace DomainFlow\ServiceProvider;
 
 use DomainFlow\Application;
-use DomainFlow\Application\Class\BasicEventDispatcher;
 use DomainFlow\Application\Interface\EventDispatcherInterface;
 use DomainFlow\Service\AbstractServiceProvider;
 
@@ -18,7 +17,10 @@ class EventDispatcherServiceProvider extends AbstractServiceProvider
     public bool $defer = false;
 
     /**
-     * Register the event dispatcher.
+     * Bind the Application's own event dispatcher instance as
+     * EventDispatcherInterface, so lifecycle listeners registered via
+     * Application::on()/once() and services resolved through the container
+     * observe the same event stream instead of two independent dispatchers.
      *
      * @param Application $app
      * @return void
@@ -26,10 +28,9 @@ class EventDispatcherServiceProvider extends AbstractServiceProvider
     public function register(
         Application $app
     ): void {
-        // Register the basic event dispatcher.
         $app->instance(
             EventDispatcherInterface::class,
-            new BasicEventDispatcher()
+            $app->getEventDispatcher()
         );
     }
 
