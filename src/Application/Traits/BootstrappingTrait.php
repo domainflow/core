@@ -14,6 +14,7 @@ trait BootstrappingTrait
     protected const string EVENT_BOOTING_KEY = 'booting.init';
     protected const string EVENT_BOOTED_KEY = 'booting.complete';
     protected const string EVENT_BOOTING_ERROR_KEY = 'booting.error';
+    protected const string EVENT_BOOTING_REPEAT_CALL_IGNORED_KEY = 'booting.repeat_call_ignored';
 
     /**
      * Flag indicating whether the application has booted.
@@ -88,7 +89,10 @@ trait BootstrappingTrait
      * Boot the application.
      *
      * Executes booting callbacks, registers and boots all service providers,
-     * loads deferred providers, then executes booted callbacks.
+     * loads deferred providers, then executes booted callbacks. A repeat
+     * call on an already-booted application performs no boot work and fires
+     * EVENT_BOOTING_REPEAT_CALL_IGNORED_KEY instead of EVENT_BOOTING_KEY, so
+     * the audit trail never implies a real boot cycle ran twice.
      *
      * @throws Throwable
      * @return void
@@ -99,11 +103,13 @@ trait BootstrappingTrait
             static::setInstance($this);
         }
 
-        $this->fireEvent(self::EVENT_BOOTING_KEY, $this);
-
         if ($this->booted) {
+            $this->fireEvent(self::EVENT_BOOTING_REPEAT_CALL_IGNORED_KEY, $this);
+
             return;
         }
+
+        $this->fireEvent(self::EVENT_BOOTING_KEY, $this);
 
         try {
             $this->runBootingCallbacks();
