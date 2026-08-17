@@ -27,7 +27,7 @@ class AbstractServiceProviderTest extends TestCase
     public function test_registerAndProvides(): void
     {
         $provider = new DummyServiceProvider();
-        $app = $this->createMock(Application::class);
+        $app = $this->createStub(Application::class);
         $provider->register($app);
         $this->assertEquals(['dummy.service'], $provider->provides());
     }
@@ -38,7 +38,7 @@ class AbstractServiceProviderTest extends TestCase
     public function test_bootDoesNothing(): void
     {
         $provider = new DummyServiceProvider();
-        $app = $this->createMock(Application::class);
+        $app = $this->createStub(Application::class);
         $provider->register($app);
         $expected = $provider->provides();
         $provider->boot($app);

@@ -170,7 +170,7 @@ final class ServiceProviderTraitTest extends TestCase
     public function test_getProvidersReturnsProviders(): void
     {
         $container = new DummyServiceProviderContainerServiceProvider();
-        $provider = $this->createMock(DummyProvider::class);
+        $provider = $this->createStub(DummyProvider::class);
         $container->registerProvider($provider);
         $providers = $container->getProviders();
 
@@ -183,7 +183,7 @@ final class ServiceProviderTraitTest extends TestCase
     public function test_getProviders(): void
     {
         $container = new Application();
-        $provider = $this->createMock(DummyProvider::class);
+        $provider = $this->createStub(DummyProvider::class);
         $container->registerProvider($provider);
 
         $providers = $container->getProviders();
