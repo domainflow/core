@@ -38,6 +38,18 @@ final class EventManagerTraitTest extends TestCase
     /**
      * @throws EventManagerException
      */
+    public function test_getEventDispatcher(): void
+    {
+        $dummyDispatcher = new TestDummyEventDispatcher();
+        $manager = new DummyEventManager();
+        $manager->setEventDispatcher($dummyDispatcher);
+
+        $this->assertSame($dummyDispatcher, $manager->getEventDispatcher());
+    }
+
+    /**
+     * @throws EventManagerException
+     */
     public function test_on_method(): void
     {
         $dummyDispatcher = new TestDummyEventDispatcher();
