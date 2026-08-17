@@ -4,9 +4,15 @@
 ![Packagist Version](https://img.shields.io/packagist/v/domainflow/core)
 ![PHP Version](https://img.shields.io/packagist/php-v/domainflow/core)
 ![License](https://img.shields.io/github/license/domainflow/core)
-![PHPStan](https://img.shields.io/badge/PHPStan-Level%209-brightgreen.svg)
+![PHPStan](https://img.shields.io/badge/PHPStan-Level%2010-brightgreen.svg)
 
 The **DomainFlow Core** package is a **Lightweight Application Bootstrapper** with features like **Service Providers**, **Application Bootstrapping**, **Middleware**, **Event Management**, and **Configuration Management** to help structure and maintain PHP back-end applications and microservices.
+
+---
+
+## ⚙️ Requirements
+
+- **PHP 8.4 or 8.5**
 
 ---
 
