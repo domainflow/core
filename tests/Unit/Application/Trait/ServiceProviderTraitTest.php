@@ -194,35 +194,6 @@ final class ServiceProviderTraitTest extends TestCase
     }
 
     /**
-     * @throws Throwable
-     */
-    public function test_loadDeferredProvidersLoadsProviders(): void
-    {
-        $container = new DummyServiceProviderContainerServiceProvider();
-        $dummyProviderClass = DummyProvider::class;
-        $ref = new ReflectionClass($container);
-        $prop = $ref->getProperty('deferredServices');
-        $prop->setValue($container, ['service6' => $dummyProviderClass]);
-
-        $container->loadDeferredProviders();
-
-        $this->assertFalse(isset($container->getDeferredServices()['service6']));
-
-        $found = false;
-        foreach ($container->events as $event) {
-            if (
-                $event['event'] === 'service_provider.deferred.loaded'
-                && $event['args'][0] === 'service6'
-                && $event['args'][1] === $dummyProviderClass
-            ) {
-                $found = true;
-                break;
-            }
-        }
-        $this->assertTrue($found, "Deferred provider loaded event not fired.");
-    }
-
-    /**
      * @throws ContainerExceptionInterface|NotFoundExceptionInterface|Throwable
      */
     public function test_applicationGetResolvesDeferredProvider(): void
@@ -365,6 +336,196 @@ final class ServiceProviderTraitTest extends TestCase
         $container->registerProvider($provider);
         $this->assertTrue($container->hasProvider($class));
     }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_registerProvider_deferredIdentifierCollision_throwsAndPreservesFirstClaim(): void
+    {
+        $container = new DummyServiceProviderContainerServiceProvider();
+        $first = new DummyProvider(['shared.service'], true);
+        $second = new SecondDummyProvider(['shared.service'], true);
+
+        $container->registerProvider($first);
+
+        $this->expectException(BootstrappingException::class);
+        $this->expectExceptionMessage(sprintf(
+            'Deferred service identifier [shared.service] is already claimed by [%s] and cannot also be claimed by [%s].',
+            get_class($first),
+            get_class($second)
+        ));
+
+        try {
+            $container->registerProvider($second);
+        } finally {
+            $this->assertSame(
+                get_class($first),
+                $container->getDeferredServices()['shared.service'],
+                'The first claiming provider must remain the owner of the identifier after a rejected collision.'
+            );
+        }
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_registerProvider_sameDeferredProviderClassTwice_isNotACollision(): void
+    {
+        $container = new DummyServiceProviderContainerServiceProvider();
+        $provider = new DummyProvider(['service1'], true);
+
+        $container->registerProvider($provider);
+        $container->registerProvider($provider);
+
+        $this->assertArrayHasKey('service1', $container->getDeferredServices());
+    }
+
+    /**
+     * @throws ContainerExceptionInterface|NotFoundExceptionInterface|Throwable
+     */
+    public function test_deferredProviderWithConstructorDependency_retainsRegisteredInstanceOnResolution(): void
+    {
+        $dependency = new LoggerStub('injected-value');
+        $provider = new ConstructorDependentDeferredProvider($dependency);
+
+        $app = new Application();
+        $app->registerProvider($provider);
+        $app->boot();
+
+        // LoggerContractInterface is not autowirable: it is an interface, so
+        // container make() cannot instantiate it without an explicit binding.
+        // Resolving it successfully proves the deferred provider (holding the
+        // constructor-injected $dependency) actually ran.
+        $resolved = $app->get(LoggerContractInterface::class);
+
+        $this->assertSame($dependency, $resolved);
+        $this->assertSame('injected-value', $resolved->value);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_deferredProviderRegisteredBeforeBoot_staysUnregisteredAndUnbootedThroughBoot(): void
+    {
+        $provider = new DummyProvider(['service.deferred.until.get'], true);
+
+        $app = new Application();
+        $app->registerProvider($provider);
+        $app->boot();
+
+        $this->assertSame(0, $provider->registerCallCount, 'A deferred provider must not register during boot().');
+        $this->assertSame(0, $provider->bootCallCount, 'A deferred provider must not boot during boot().');
+        $this->assertFalse($app->hasProvider(get_class($provider)));
+
+        $app->get('service.deferred.until.get');
+
+        $this->assertSame(1, $provider->registerCallCount);
+        $this->assertSame(1, $provider->bootCallCount);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_unregisterProvider_freesClaimedDeferredIdentifierForReuse(): void
+    {
+        $container = new DummyServiceProviderContainerServiceProvider();
+        $first = new DummyProvider(['reusable.service'], true);
+        $second = new DummyProvider(['reusable.service'], true);
+
+        $container->registerProvider($first);
+        $container->unregisterProvider(get_class($first));
+
+        $container->registerProvider($second);
+
+        $this->assertSame('reusable.service', array_key_first($container->getDeferredServices()));
+        $this->assertSame(get_class($second), $container->getDeferredServices()['reusable.service']);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_resolveDeferredProvider_missingStoredInstance_throwsInvariantViolation(): void
+    {
+        // registerProvider() always populates deferredServices and
+        // deferredProviderInstances together; this simulates the two maps
+        // falling out of sync (an internal invariant violation) to prove
+        // resolution fails loudly instead of silently instantiating a
+        // fresh, dependency-less provider.
+        $container = new DummyServiceProviderContainerServiceProvider();
+        $ref = new ReflectionClass($container);
+        $ref->getProperty('deferredServices')->setValue($container, ['service.orphaned' => DummyProvider::class]);
+
+        $this->expectException(BootstrappingException::class);
+        $this->expectExceptionMessage(
+            'No registered instance found for deferred provider [' . DummyProvider::class . '] '
+            . 'while resolving service [service.orphaned].'
+        );
+
+        $container->get('service.orphaned');
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_loadDeferredProviders_preWarmsRegisteredDeferredProvider(): void
+    {
+        $provider = new DummyProvider(['service6'], true);
+
+        $container = new DummyServiceProviderContainerServiceProvider();
+        $container->registerProvider($provider);
+
+        $container->loadDeferredProviders();
+
+        $this->assertFalse(isset($container->getDeferredServices()['service6']));
+        $this->assertSame(1, $provider->registerCallCount);
+
+        $found = false;
+        foreach ($container->events as $event) {
+            if (
+                $event['event'] === 'service_provider.deferred.loaded'
+                && $event['args'][0] === 'service6'
+                && $event['args'][1] === get_class($provider)
+            ) {
+                $found = true;
+                break;
+            }
+        }
+        $this->assertTrue($found, "Deferred provider loaded event not fired.");
+    }
+}
+
+interface LoggerContractInterface
+{
+}
+
+final class LoggerStub implements LoggerContractInterface
+{
+    public function __construct(
+        public readonly string $value
+    ) {
+    }
+}
+
+final class ConstructorDependentDeferredProvider extends AbstractServiceProvider
+{
+    protected array $providedServices = [LoggerContractInterface::class];
+    public bool $defer = true;
+
+    public function __construct(
+        private readonly LoggerContractInterface $dependency
+    ) {
+    }
+
+    public function register(
+        Application $app
+    ): void {
+        $app->instance(LoggerContractInterface::class, $this->dependency);
+    }
+
+    public function isDeferred(): bool
+    {
+        return $this->defer;
+    }
 }
 
 # Dummy classes
@@ -467,6 +628,40 @@ class DummyProvider implements ServiceProviderInterface
     ): void {
         $this->bootCallCount++;
         $this->bootedCalled = true;
+    }
+
+    public function provides(): array
+    {
+        return $this->provides;
+    }
+
+    public function isDeferred(): bool
+    {
+        return $this->defer;
+    }
+}
+
+class SecondDummyProvider implements ServiceProviderInterface
+{
+    private array $provides;
+    public bool $defer = false;
+
+    public function __construct(
+        array $provides = [],
+        bool $defer = false
+    ) {
+        $this->provides = $provides;
+        $this->defer = $defer;
+    }
+
+    public function register(
+        $app
+    ): void {
+    }
+
+    public function boot(
+        $app
+    ): void {
     }
 
     public function provides(): array

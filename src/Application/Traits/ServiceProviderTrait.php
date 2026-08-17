@@ -37,9 +37,41 @@ trait ServiceProviderTrait
      *
      * Format: [ service key => provider class name ]
      *
+     * Entries are removed once the identifier has been resolved. For
+     * collision detection across a service key's whole lifetime, see
+     * $deferredServiceClaims.
+     *
      * @var array<string, string>
      */
     protected array $deferredServices = [];
+
+    /**
+     * Permanent record of which provider class first claimed a deferred
+     * service identifier (class-string, interface-string, or plain string
+     * alias — all are opaque identifiers here). Unlike $deferredServices,
+     * an entry is never removed on resolution, only on unregisterProvider().
+     * This is what registerProvider() checks to reject a second, different
+     * provider class claiming an already-claimed identifier.
+     *
+     * Format: [ service key => provider class name ]
+     *
+     * @var array<string, string>
+     */
+    protected array $deferredServiceClaims = [];
+
+    /**
+     * The exact instance passed to registerProvider() for each deferred
+     * provider class, keyed by class name. Deferred providers are resolved
+     * from this stored instance rather than being re-instantiated, so a
+     * provider with required constructor dependencies works the same way
+     * whether it is eager or deferred: the caller constructs it once, and
+     * that instance is the one register()/boot() are eventually called on.
+     *
+     * Format: [ provider class name => ServiceProviderInterface instance ]
+     *
+     * @var array<string, ServiceProviderInterface>
+     */
+    protected array $deferredProviderInstances = [];
 
     /**
      * Provider classes whose boot() has already run.
@@ -57,8 +89,16 @@ trait ServiceProviderTrait
      * registers immediately; a deferred provider only registers once one of
      * its provided service identifiers is first requested through get().
      *
+     * A deferred provider's provided identifiers (class, interface, or plain
+     * string) must each be claimed by exactly one provider class. Claiming
+     * an identifier already owned by a different provider class throws
+     * instead of silently discarding the earlier claim. Registering the
+     * same provider class again for the same identifier is not a collision;
+     * the most recently supplied instance is the one used on resolution,
+     * which keeps constructor-dependent providers re-registrable.
+     *
      * @param ServiceProviderInterface $provider
-     * @throws Throwable
+     * @throws BootstrappingException|Throwable
      * @return void
      */
     public function registerProvider(
@@ -72,10 +112,29 @@ trait ServiceProviderTrait
         }
 
         if ($provider->isDeferred() === true) {
-            // Store in deferred services but do NOT register
             foreach ($provider->provides() as $serviceKey) {
+                $existingClaim = $this->deferredServiceClaims[$serviceKey] ?? null;
+
+                if ($existingClaim !== null && $existingClaim !== $class) {
+                    throw BootstrappingException::forDeferredServiceIdentifierCollision(
+                        $serviceKey,
+                        $existingClaim,
+                        $class
+                    );
+                }
+            }
+
+            // Only claim identifiers once every one of them has passed the
+            // collision check above, so a rejected registration leaves no
+            // partial claims behind.
+            foreach ($provider->provides() as $serviceKey) {
+                $this->deferredServiceClaims[$serviceKey] = $class;
                 $this->deferredServices[$serviceKey] = $class;
             }
+
+            // Store the actual instance (which may carry constructor
+            // dependencies) so it can be resolved without re-instantiation.
+            $this->deferredProviderInstances[$class] = $provider;
 
             return;
         }
@@ -90,6 +149,10 @@ trait ServiceProviderTrait
     /**
      * Unregister a previously registered service provider.
      *
+     * Also releases any deferred service identifiers this provider class
+     * had claimed, making them available for a different provider class to
+     * claim afterward.
+     *
      * @param string $providerClass The fully-qualified class name of the provider.
      * @throws EventManagerException
      * @return void
@@ -97,12 +160,21 @@ trait ServiceProviderTrait
     public function unregisterProvider(
         string $providerClass
     ): void {
-        unset($this->serviceProviders[$providerClass], $this->bootedProviders[$providerClass]);
+        unset(
+            $this->serviceProviders[$providerClass],
+            $this->bootedProviders[$providerClass],
+            $this->deferredProviderInstances[$providerClass]
+        );
 
-        // Remove deferred services tied to this provider
         foreach ($this->deferredServices as $serviceKey => $storedProvider) {
             if ($storedProvider === $providerClass) {
                 unset($this->deferredServices[$serviceKey]);
+            }
+        }
+
+        foreach ($this->deferredServiceClaims as $serviceKey => $storedProvider) {
+            if ($storedProvider === $providerClass) {
+                unset($this->deferredServiceClaims[$serviceKey]);
             }
         }
 
@@ -159,7 +231,15 @@ trait ServiceProviderTrait
     }
 
     /**
-     * Load any deferred service providers for services that have not been bound.
+     * Pre-warm every still-deferred provider by registering and booting it
+     * immediately, for services that have not already been bound.
+     *
+     * This is an explicit opt-in utility (e.g. for a CLI warm-up step) and
+     * is never called automatically by boot() or get(): the documented
+     * lifecycle only loads a Deferred provider on first request of one of
+     * its provided service identifiers (see docs/ARCHITECTURE.md). Calling
+     * this defeats that laziness for whatever providers are still deferred
+     * at the time it runs.
      *
      * @throws Throwable
      * @return void
@@ -177,6 +257,10 @@ trait ServiceProviderTrait
      * Register and boot the provider for a deferred service key exactly
      * once, then remove that key from the deferred map.
      *
+     * Resolves against the instance stored in $deferredProviderInstances at
+     * registerProvider() time rather than constructing a new one, so a
+     * provider with required constructor dependencies resolves correctly.
+     *
      * @param string $serviceKey
      * @param string $providerClass
      * @throws BootstrappingException|Throwable
@@ -187,8 +271,11 @@ trait ServiceProviderTrait
         string $providerClass
     ): void {
         if (!isset($this->serviceProviders[$providerClass])) {
-            /** @var ServiceProviderInterface $provider */
-            $provider = new $providerClass();
+            $provider = $this->deferredProviderInstances[$providerClass] ?? null;
+
+            if ($provider === null) {
+                throw BootstrappingException::forMissingDeferredProviderInstance($serviceKey, $providerClass);
+            }
 
             try {
                 $this->registerProviderOnce($provider);
