@@ -13,11 +13,8 @@ use DomainFlow\ServiceProvider\EventDispatcherServiceProvider;
 use Exception;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\TestCase;
-use Psr\Container\ContainerExceptionInterface;
-use Psr\Container\NotFoundExceptionInterface;
 use ReflectionClass;
 use ReflectionException;
-use stdClass;
 use Throwable;
 
 #[CoversClass(Application::class)]
@@ -28,30 +25,9 @@ final class BootstrappingTraitTest extends TestCase
     /**
      * @throws Throwable
      */
-    public function test_boot_from_cache(): void
-    {
-        $app = new DummyApplication();
-        $app->cachingEnabled = true;
-        $app->basePathReturn = __FILE__;
-
-        $app->events = [];
-        $app->booted = false;
-
-        $app->boot();
-
-        $this->assertTrue($app->loadResolvedCalled, 'loadResolvedServicesFromFile should have been called');
-        $this->assertTrue($app->booted, 'Application should be marked as booted');
-        $this->assertEventFired($app->events, 'booting.complete');
-    }
-
-    /**
-     * @throws Throwable
-     */
     public function test_normal_boot(): void
     {
         $app = new DummyApplication();
-        $app->cachingEnabled = false;
-        $app->basePathReturn = 'non_existent_file';
 
         $bootingCalled = false;
         $bootedCalled = false;
@@ -80,8 +56,6 @@ final class BootstrappingTraitTest extends TestCase
     public function test_boot_with_booting_callback_error(): void
     {
         $app = new DummyApplication();
-        $app->cachingEnabled = false;
-        $app->basePathReturn = 'non_existent_file';
 
         $app->booting(function (Application $a) {
             throw new Exception('Booting callback error');
@@ -99,8 +73,6 @@ final class BootstrappingTraitTest extends TestCase
     public function test_boot_with_booted_callback_error(): void
     {
         $app = new DummyApplication();
-        $app->cachingEnabled = false;
-        $app->basePathReturn = 'non_existent_file';
 
         $app->booted(function (Application $a) {
             throw new Exception('Booted callback error');
@@ -115,9 +87,6 @@ final class BootstrappingTraitTest extends TestCase
     public function test_boot_with_provider_registration_error(): void
     {
         $app = new DummyApplication();
-        $app->cachingEnabled = false;
-        $app->basePathReturn = 'non_existent_file';
-
         $app->serviceProviders[] = new DummyProviderThrows();
 
         try {
@@ -143,8 +112,6 @@ final class BootstrappingTraitTest extends TestCase
     public function test_boot_retry_after_provider_registration_failure_does_not_reregister_succeeded_providers(): void
     {
         $app = new DummyApplication();
-        $app->cachingEnabled = false;
-        $app->basePathReturn = 'non_existent_file';
 
         $succeeding = new DummyCountingProvider();
         $failing = new DummyProviderThrows();
@@ -185,8 +152,6 @@ final class BootstrappingTraitTest extends TestCase
     public function test_boot_when_already_booted(): void
     {
         $app = new DummyApplication();
-        $app->cachingEnabled = false;
-        $app->basePathReturn = 'non_existent_file';
         $app->booted = true;
 
         $initialCount = count($app->events);
@@ -243,56 +208,6 @@ final class BootstrappingTraitTest extends TestCase
     }
 
     /**
-     * @throws ContainerExceptionInterface|NotFoundExceptionInterface|Throwable
-     */
-    public function test_resolveDeferredServices_caches_service(): void
-    {
-        $app = new class() extends DummyApplication {
-            public function get(
-                string $id
-            ): mixed {
-                if ($id === 'dummyService') {
-                    return new stdClass();
-                }
-
-                return parent::get($id);
-            }
-            public function has(
-                string $id
-            ): bool {
-                if ($id === 'dummyService') {
-                    return false;
-                }
-
-                return parent::has($id);
-            }
-        };
-
-        $dummyProvider = new class() {
-            public bool $defer = false;
-            public function provides(): array
-            {
-                return ['dummyService'];
-            }
-        };
-        $app->serviceProviders[] = $dummyProvider;
-
-        $ref = new ReflectionClass($app);
-        $prop = $ref->getProperty('resolvedServicesCache');
-        $prop->setValue($app, []);
-
-        $this->assertArrayNotHasKey('dummyService', $prop->getValue($app), 'Cache should not yet contain dummyService');
-
-        $app->resolveDeferredServices();
-
-        // Get the updated cache via reflection
-        $cache = $prop->getValue($app);
-        $this->assertArrayHasKey('dummyService', $cache, 'dummyService should have been cached');
-        $instance = $cache['dummyService'];
-        $this->assertInstanceOf(stdClass::class, $instance, 'Cached instance should be an instance of stdClass');
-    }
-
-    /**
      * @throws ReflectionException|Throwable
      */
     public function test_boot_sets_instance_if_not_already_set(): void
@@ -304,8 +219,6 @@ final class BootstrappingTraitTest extends TestCase
         $prop->setValue(null, []);
 
         $app = new DummyApplication();
-        $app->cachingEnabled = true;
-        $app->basePathReturn = __FILE__;
 
         $app->boot();
 
@@ -322,9 +235,6 @@ class DummyApplication extends Application
      * @var array<string, array<int, mixed>>
      */
     public array $events = [];
-    public bool $cachingEnabled = false;
-    public bool $loadResolvedCalled = false;
-    public string $basePathReturn = 'dummy';
 
     public bool $booted = false;
 
@@ -340,25 +250,6 @@ class DummyApplication extends Application
         ...$args
     ): void {
         $this->events[] = [$event, $args];
-    }
-
-    public function basePath(
-        string $subPath = ''
-    ): string {
-        return $this->cachingEnabled ? __FILE__ : $this->basePathReturn;
-    }
-
-    public function isCachingEnabled(): bool
-    {
-        return $this->cachingEnabled;
-    }
-
-    public function loadResolvedServicesFromFile(
-        string $filePath
-    ): void {
-        $this->loadResolvedCalled = true;
-        $this->fireEvent('booting.complete', $this);
-        $this->booted = true;
     }
 
     public function registerProvider(

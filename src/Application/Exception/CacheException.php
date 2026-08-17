@@ -21,45 +21,7 @@ final class CacheException extends Exception
         ?Throwable $previous = null
     ): self {
         return new self(
-            "Failed to write resolved services cache to file: $filePath",
-            0,
-            $previous
-        );
-    }
-
-    /**
-     * Factory method for read failure.
-     *
-     * @param string $filePath
-     * @param Throwable|null $previous
-     * @return self
-     */
-    public static function forReadFailure(
-        string $filePath,
-        ?Throwable $previous = null
-    ): self {
-        return new self(
-            "Failed to read resolved services cache file: $filePath",
-            0,
-            $previous
-        );
-    }
-
-    /**
-     * Factory method for unserialize failure.
-     *
-     * @param string $filePath
-     * @param string $data
-     * @param Throwable|null $previous
-     * @return self
-     */
-    public static function forUnserializeFailure(
-        string $filePath,
-        string $data,
-        ?Throwable $previous = null
-    ): self {
-        return new self(
-            "Failed to unserialize resolved services cache from file: $filePath. Data: $data",
+            "Failed to write cache to file: $filePath",
             0,
             $previous
         );

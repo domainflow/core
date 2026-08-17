@@ -5,17 +5,12 @@ declare(strict_types=1);
 namespace DomainFlow\Application\Traits;
 
 use DomainFlow\Application\Exception\BootstrappingException;
-use DomainFlow\Application\Exception\CacheException;
-use DomainFlow\Application\Exception\EventManagerException;
 use DomainFlow\Container\Exception\ContainerException;
 use DomainFlow\ServiceProvider\EventDispatcherServiceProvider;
-use Psr\Container\ContainerExceptionInterface;
-use Psr\Container\NotFoundExceptionInterface;
 use Throwable;
 
 trait BootstrappingTrait
 {
-    private const string CACHE_FILE_KEY = 'cache/services.cache';
     protected const string EVENT_BOOTING_KEY = 'booting.init';
     protected const string EVENT_BOOTED_KEY = 'booting.complete';
     protected const string EVENT_BOOTING_ERROR_KEY = 'booting.error';
@@ -104,10 +99,6 @@ trait BootstrappingTrait
             static::setInstance($this);
         }
 
-        if ($this->bootFromCache()) {
-            return;
-        }
-
         $this->fireEvent(self::EVENT_BOOTING_KEY, $this);
 
         if ($this->booted) {
@@ -126,45 +117,6 @@ trait BootstrappingTrait
             $this->fireEvent(self::EVENT_BOOTING_ERROR_KEY, 'Generic boot error', $e);
             throw BootstrappingException::forGenericError('An error occurred during bootstrapping', $e);
         }
-    }
-
-    /**
-     * Load deferred service providers and cache resolved services.
-     *
-     * @throws ContainerExceptionInterface|NotFoundExceptionInterface|Throwable
-     */
-    public function resolveDeferredServices(): void
-    {
-        foreach ($this->serviceProviders as $provider) {
-            if (!property_exists($provider, 'defer') || !$provider->defer) {
-                foreach ($provider->provides() as $serviceKey) {
-                    if (!$this->has($serviceKey)) {
-                        $instance = $this->get($serviceKey);
-                        $this->resolvedServicesCache[$serviceKey] = $instance;
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Check for a cached services file and load if available.
-     *
-     * @throws EventManagerException|CacheException
-     * @return bool
-     */
-    private function bootFromCache(): bool
-    {
-        $cacheFile = $this->basePath(self::CACHE_FILE_KEY);
-        if ($this->isCachingEnabled() && file_exists($cacheFile)) {
-            $this->loadResolvedServicesFromFile($cacheFile);
-            $this->fireEvent(self::EVENT_BOOTED_KEY, $this);
-            $this->booted = true;
-
-            return true;
-        }
-
-        return false;
     }
 
     /**

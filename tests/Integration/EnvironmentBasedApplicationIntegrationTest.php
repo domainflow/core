@@ -52,21 +52,12 @@ final class EnvironmentBasedApplicationIntegrationTest extends TestCase
         $providers = $app->getProviders();
         $this->assertArrayHasKey(EnvironmentServiceProvider::class, $providers);
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
         $userService = $app->get(UserServiceEnv::class);
         $userService->createUser('alice');
         $output = ob_get_clean();
 
         $this->assertStringContainsString("Registering development services...", $output);
         $this->assertStringContainsString("[DEV] User 'alice' has been created.", $output);
-
-        // Check if resolved services cache is populated
-        $cache = $app->getResolvedServicesCache();
-        $this->assertNotEmpty($cache);
-        $this->assertArrayHasKey(UserServiceEnv::class, $cache);
     }
 
     /**
@@ -90,10 +81,6 @@ final class EnvironmentBasedApplicationIntegrationTest extends TestCase
         $providers = $app->getProviders();
         $this->assertArrayHasKey(EnvironmentServiceProvider::class, $providers);
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
         $userService = $app->get(UserServiceEnv::class);
         $userService->createUser('bob');
         $output = ob_get_clean();
@@ -104,12 +91,6 @@ final class EnvironmentBasedApplicationIntegrationTest extends TestCase
         $this->assertFileExists($logFile);
         $logContent = file_get_contents($logFile);
         $this->assertStringContainsString("[PROD] User 'bob' has been created.", $logContent);
-
-        // Check if resolved services cache is populated
-        $cache = $app->getResolvedServicesCache();
-        $this->assertNotEmpty($cache);
-        $this->assertArrayHasKey(UserServiceEnv::class, $cache);
-
     }
 }
 

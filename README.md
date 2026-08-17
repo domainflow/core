@@ -34,7 +34,7 @@ The **DomainFlow Core** package is a **Lightweight Application Bootstrapper** wi
   Manage environment variables, base paths, and config paths out of the box.
 
 - **Caching**  
-  Optionally cache resolved service instances (and deferred providers) for faster subsequent loads.
+  Optionally persist validated, versioned class-string bindings across processes via `FileContainerCache`, a filesystem-backed adapter for [DomainFlow Container](https://www.github.com/domainflow/container)'s declarative definitions cache (`$app->setExternalCache(new FileContainerCache($path))`). A warm cache hit never skips the boot lifecycle and never re-hydrates a resolved object — only class-string bindings and aliases are restored, and every service is still resolved fresh through the normal container path.
 
 ---
 
