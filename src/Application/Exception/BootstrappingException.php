@@ -71,6 +71,44 @@ final class BootstrappingException extends Exception
     }
 
     /**
+     * Factory method for a deferred service identifier claimed by more than
+     * one provider class.
+     *
+     * @param string $serviceKey
+     * @param string $existingProviderClass
+     * @param string $conflictingProviderClass
+     * @return self
+     */
+    public static function forDeferredServiceIdentifierCollision(
+        string $serviceKey,
+        string $existingProviderClass,
+        string $conflictingProviderClass
+    ): self {
+        return new self(
+            "Deferred service identifier [$serviceKey] is already claimed by "
+            . "[$existingProviderClass] and cannot also be claimed by [$conflictingProviderClass]."
+        );
+    }
+
+    /**
+     * Factory method for a deferred provider resolution with no recorded
+     * instance to resolve against.
+     *
+     * @param string $serviceKey
+     * @param string $providerClass
+     * @return self
+     */
+    public static function forMissingDeferredProviderInstance(
+        string $serviceKey,
+        string $providerClass
+    ): self {
+        return new self(
+            "No registered instance found for deferred provider [$providerClass] "
+            . "while resolving service [$serviceKey]."
+        );
+    }
+
+    /**
      * Factory method for generic bootstrapping errors.
      *
      * @param string $message

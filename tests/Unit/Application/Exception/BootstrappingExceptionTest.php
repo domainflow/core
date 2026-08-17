@@ -49,6 +49,34 @@ final class BootstrappingExceptionTest extends TestCase
         $this->assertSame($previous, $exception->getPrevious());
     }
 
+    public function test_forDeferredServiceIdentifierCollision(): void
+    {
+        $exception = BootstrappingException::forDeferredServiceIdentifierCollision(
+            'service1',
+            'FirstProvider',
+            'SecondProvider'
+        );
+
+        $this->assertSame(
+            'Deferred service identifier [service1] is already claimed by [FirstProvider] '
+            . 'and cannot also be claimed by [SecondProvider].',
+            $exception->getMessage()
+        );
+        $this->assertSame(0, $exception->getCode());
+    }
+
+    public function test_forMissingDeferredProviderInstance(): void
+    {
+        $exception = BootstrappingException::forMissingDeferredProviderInstance('service1', 'ProviderClass');
+
+        $this->assertSame(
+            'No registered instance found for deferred provider [ProviderClass] '
+            . 'while resolving service [service1].',
+            $exception->getMessage()
+        );
+        $this->assertSame(0, $exception->getCode());
+    }
+
     public function test_forGenericError(): void
     {
         $message = 'Generic error occurred';
