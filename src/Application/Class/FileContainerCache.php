@@ -193,8 +193,11 @@ final class FileContainerCache implements ContainerCacheInterface
         array $store
     ): void {
         $dir = dirname($this->filePath);
-        if (!is_dir($dir) && !mkdir($dir, 0777, true) && !is_dir($dir)) {
-            throw CacheException::forUnknownError("Failed to create cache directory: $dir");
+        if (!is_dir($dir)) {
+            if (!mkdir($dir, 0755, true) && !is_dir($dir)) {
+                throw CacheException::forUnknownError("Failed to create cache directory: $dir");
+            }
+            chmod($dir, 0755);
         }
 
         try {
