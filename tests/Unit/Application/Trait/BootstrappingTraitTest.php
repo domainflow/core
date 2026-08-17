@@ -156,6 +156,8 @@ final class BootstrappingTraitTest extends TestCase
         $app->boot();
 
         $this->assertSame($initialCount + 1, count($app->events), 'Exactly one new event should be fired when already booted.');
+        $this->assertEventFired($app->events, 'booting.repeat_call_ignored');
+        $this->assertEventNotFired($app->events, 'booting.init', 'A no-op repeat boot() call must not refire booting.init.');
     }
 
     private function assertEventFired(array $events, string $expectedEvent): void
@@ -168,6 +170,16 @@ final class BootstrappingTraitTest extends TestCase
             }
         }
         $this->fail("Event {$expectedEvent} was not fired.");
+    }
+
+    private function assertEventNotFired(array $events, string $unexpectedEvent, string $message = ''): void
+    {
+        foreach ($events as [$event, $args]) {
+            if ($event === $unexpectedEvent) {
+                $this->fail($message !== '' ? $message : "Event {$unexpectedEvent} should not have been fired.");
+            }
+        }
+        $this->assertTrue(true);
     }
 
     /**
