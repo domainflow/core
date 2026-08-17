@@ -5,12 +5,18 @@ declare(strict_types=1);
 namespace DomainFlow\Tests\Integration;
 
 use DomainFlow\Application;
-use DomainFlow\Service\AbstractServiceProvider;
+use DomainFlow\Application\Class\FileContainerCache;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\TestCase;
-use RuntimeException;
 use Throwable;
 
+/**
+ * Exercises the safe, cross-process declarative binding cache: Core supplies
+ * a filesystem ContainerCacheInterface adapter (FileContainerCache); the
+ * validated, versioned cache content and its cold/warm hydration semantics
+ * are owned entirely by domainflow/container. No resolved object is ever
+ * persisted, and a cache hit never bypasses the boot() lifecycle.
+ */
 #[CoversNothing]
 class ServiceCachingApplicationIntegrationTest extends TestCase
 {
@@ -18,20 +24,18 @@ class ServiceCachingApplicationIntegrationTest extends TestCase
 
     protected function setUp(): void
     {
-        putenv('CONTAINER_CACHE=true');
-        $this->cacheFile = __DIR__ . '/test_cache/custom.services.cache';
-
-        if (file_exists($this->cacheFile)) {
-            unlink($this->cacheFile);
-        }
-        $cacheDir = dirname($this->cacheFile);
-        if (is_dir($cacheDir)) {
-            rmdir($cacheDir);
-        }
+        $this->cacheFile = __DIR__ . '/test_cache/definitions.cache';
+        CachedService::$instantiations = 0;
+        $this->removeCacheArtifacts();
     }
 
     protected function tearDown(): void
     {
+        $this->removeCacheArtifacts();
+    }
+
+    private function removeCacheArtifacts(): void
+    {
         if (file_exists($this->cacheFile)) {
             unlink($this->cacheFile);
         }
@@ -44,189 +48,121 @@ class ServiceCachingApplicationIntegrationTest extends TestCase
     /**
      * @throws Throwable
      */
-    public function test_expensiveServiceCaching(): void
+    public function test_bindings_persist_across_application_instances(): void
     {
-        $app = new Application();
-        $app->registerProvider(new ExpensiveServiceProvider());
-        $app->setCachePath($this->cacheFile);
-        $app->boot();
+        $app1 = new Application(__DIR__);
+        $app1->setExternalCache(new FileContainerCache($this->cacheFile));
+        $app1->bind(CachedService::class, CachedService::class, true);
+        $app1->boot();
 
-        // Check that application boot process completed successfully
-        $this->assertTrue($app->isBooted());
+        $this->assertFileExists($this->cacheFile, 'Binding a class-string cacheable service must persist the cache file.');
+        $cacheContent = (string) file_get_contents($this->cacheFile);
+        $this->assertStringNotContainsString('O:', $cacheContent, 'Cache file must never contain a PHP serialized object.');
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
+        // A fresh Application instance, without ever calling bind() itself,
+        // restores the binding purely from the validated declarative cache.
+        $app2 = new Application(__DIR__);
+        $app2->setExternalCache(new FileContainerCache($this->cacheFile));
 
-        // Check if correct provider is registered
-        $providers = $app->getProviders();
-        $this->assertArrayNotHasKey(ExpensiveServiceProvider::class, $providers);
-
-        ob_start();
-
-        if (file_exists($app->getCachePath())) {
-            echo "Loading services from cache...\n";
-            try {
-                $app->loadResolvedServicesFromFile($app->getCachePath());
-            } catch (RuntimeException $e) {
-                echo "Failed to load service cache: " . $e->getMessage() . "\n";
-            }
-        } else {
-            echo "No cache found. Bootstrapping application...\n";
-        }
-
-        $service = $app->get(ExpensiveService::class);
-
-        // Check if correct provider is registered (after using get())
-        $providers = $app->getProviders();
-        $this->assertArrayHasKey(ExpensiveServiceProvider::class, $providers);
-
-        # cached services now exist
-        $cache = $app->getResolvedServicesCache();
-        $this->assertNotEmpty($cache);
-        $this->assertArrayHasKey(ExpensiveService::class, $cache);
-
-        echo $service->process() . "\n";
-
-        if (!file_exists($app->getCachePath())) {
-            try {
-                $app->saveResolvedServicesToFile($app->getCachePath());
-                echo "Services cached to " . $app->getCachePath() . "\n";
-            } catch (RuntimeException $e) {
-                echo "Failed to save service cache: " . $e->getMessage() . "\n";
-            }
-        }
-
-        // Verify the cache file content is as expected
-        $cacheContent = file_get_contents($app->getCachePath());
-        echo "Cache file content:\n" . $cacheContent . "\n";
-
-        $output = ob_get_clean();
-
-        // Basic output assertions
-        $this->assertStringContainsString("No cache found. Bootstrapping application...", $output);
-        $this->assertStringContainsString("ExpensiveService: Instance created.", $output);
-        $this->assertStringContainsString("ExpensiveService has processed the data!", $output);
-        $this->assertStringContainsString("Services cached to " . $this->cacheFile, $output);
-        $this->assertStringContainsString("Cache file content:", $output);
-        $this->assertFileExists($this->cacheFile);
-        $this->assertNotEmpty(file_get_contents($this->cacheFile));
-
-        // Verify that the cache file content contains the expected key.
-        $cacheData = file_get_contents($app->getCachePath());
-        $cacheArray = unserialize($cacheData, ['allowed_classes' => true]);
-
-        $this->assertIsArray($cacheArray);
-        $this->assertArrayHasKey(ExpensiveService::class, $cacheArray);
+        $this->assertTrue($app2->has(CachedService::class), 'A warm Application should restore the binding from cache.');
     }
 
     /**
      * @throws Throwable
      */
-    public function test_expensiveServiceLoadingFromExistingCache(): void
+    public function test_cache_hit_still_runs_the_full_boot_lifecycle_and_resolves_fresh_instances(): void
     {
-        // Boot first instance and save cache.
-        $app1 = new Application();
-        $app1->registerProvider(new ExpensiveServiceProvider());
-        $app1->setCachePath($this->cacheFile);
-        $app1->boot();
+        $app1 = new Application(__DIR__);
+        $app1->setExternalCache(new FileContainerCache($this->cacheFile));
+        $app1->bind(CachedService::class, CachedService::class, false);
+        $service1 = $app1->get(CachedService::class);
 
-        // Check that application boot process completed successfully
-        $this->assertTrue($app1->isBooted());
+        $this->assertSame(1, CachedService::$instantiations);
 
-        # Verify no cached services yet
-        $cache = $app1->getResolvedServicesCache();
-        $this->assertEmpty($cache);
+        $app2 = new Application(__DIR__);
+        $app2->setExternalCache(new FileContainerCache($this->cacheFile));
 
-        // Check if correct provider is registered
-        $providers = $app1->getProviders();
-        $this->assertArrayNotHasKey(ExpensiveServiceProvider::class, $providers);
+        $bootingRan = false;
+        $bootedRan = false;
+        $providerRegistered = false;
+        $app2->booting(function () use (&$bootingRan) {
+            $bootingRan = true;
+        });
+        $app2->booted(function () use (&$bootedRan) {
+            $bootedRan = true;
+        });
+        $app2->registerProvider(new CountingServiceProvider(function () use (&$providerRegistered) {
+            $providerRegistered = true;
+        }));
 
-        ob_start();
-        $app1->boot();
-        $service1 = $app1->get(ExpensiveService::class);
-
-        // Check if correct provider is registered (after using get())
-        $providers = $app1->getProviders();
-        $this->assertArrayHasKey(ExpensiveServiceProvider::class, $providers);
-
-        echo $service1->process() . "\n";
-
-        if (!file_exists($app1->getCachePath())) {
-            $app1->saveResolvedServicesToFile($app1->getCachePath());
-            echo "Services cached to " . $app1->getCachePath() . "\n";
-        }
-        ob_end_clean();
-
-        // Boot second instance using existing cache.
-        $app2 = new Application();
-        $app2->registerProvider(new ExpensiveServiceProvider());
-        $app2->setCachePath($this->cacheFile);
-
-        ob_start();
-        if (file_exists($app2->getCachePath())) {
-            echo "Loading services from cache...\n";
-            try {
-                $app2->loadResolvedServicesFromFile($app2->getCachePath());
-            } catch (RuntimeException $e) {
-                echo "Failed to load service cache: " . $e->getMessage() . "\n";
-            }
-        } else {
-            echo "No cache found. Bootstrapping application...\n";
-        }
         $app2->boot();
 
-        // Check that application boot process completed successfully
+        $this->assertTrue($bootingRan, 'A cache hit must not skip the booting callback stage.');
+        $this->assertTrue($bootedRan, 'A cache hit must not skip the booted callback stage.');
+        $this->assertTrue($providerRegistered, 'A cache hit must not skip provider registration.');
         $this->assertTrue($app2->isBooted());
 
-        # Verify cached services exist
-        $cache2 = $app2->getResolvedServicesCache();
-        $this->assertNotEmpty($cache2);
-        $this->assertArrayHasKey(ExpensiveService::class, $cache2);
+        $this->assertTrue($app2->has(CachedService::class), 'The restored binding should be usable without re-declaring it.');
 
-        $service2 = $app2->get(ExpensiveService::class);
+        $service2 = $app2->get(CachedService::class);
 
-        // Check if correct provider is registered
-        $providers = $app2->getProviders();
-        $this->assertArrayHasKey(ExpensiveServiceProvider::class, $providers);
+        $this->assertSame(2, CachedService::$instantiations, 'A warm-cache resolution must build a fresh instance, never deserialize one.');
+        $this->assertNotSame($service1, $service2);
+    }
 
-        echo $service2->process() . "\n";
-        $output = ob_get_clean();
+    /**
+     * @throws Throwable
+     */
+    public function test_corrupt_cache_file_is_ignored_not_trusted(): void
+    {
+        mkdir(dirname($this->cacheFile), 0777, true);
+        file_put_contents($this->cacheFile, '{"tampered": "not a valid definitions payload"}');
 
-        # Verify the output
-        $this->assertStringContainsString("Loading services from cache...", $output);
-        $this->assertEquals(1, substr_count($output, "ExpensiveService: Instance created."), "Service should be instantiated only once.");
-        $this->assertStringContainsString("ExpensiveService has processed the data!", $output);
+        $app = new Application(__DIR__);
+        $app->setExternalCache(new FileContainerCache($this->cacheFile));
+
+        $this->assertFalse($app->has(CachedService::class), 'A corrupt or tampered cache file must never be trusted.');
+
+        // The application still boots and resolves normally after an
+        // explicit bind(), proving the corrupt cache did not hide or break
+        // valid application state.
+        $app->bind(CachedService::class, CachedService::class, false);
+        $app->boot();
+
+        $this->assertTrue($app->isBooted());
+        $this->assertInstanceOf(CachedService::class, $app->get(CachedService::class));
     }
 }
 
 # Dummy classes
-class ExpensiveService
+class CachedService
 {
+    public static int $instantiations = 0;
+
     public function __construct()
     {
-        echo "ExpensiveService: Instance created.\n";
-    }
-
-    public function process(): string
-    {
-        return "ExpensiveService has processed the data!";
+        self::$instantiations++;
     }
 }
 
-class ExpensiveServiceProvider extends AbstractServiceProvider
+class CountingServiceProvider extends \DomainFlow\Service\AbstractServiceProvider
 {
-    protected array $providedServices = [ExpensiveService::class];
-    public bool $defer = true;
+    /**
+     * @param callable(): void $onRegister
+     */
+    public function __construct(
+        private readonly mixed $onRegister
+    ) {
+    }
 
     public function register(
         Application $app
     ): void {
-        $app->bind(ExpensiveService::class, fn () => new ExpensiveService(), true);
+        ($this->onRegister)();
     }
 
     public function isDeferred(): bool
     {
-        return $this->defer;
+        return false;
     }
 }

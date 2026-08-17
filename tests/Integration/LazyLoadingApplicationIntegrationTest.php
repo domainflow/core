@@ -31,27 +31,18 @@ class LazyLoadingApplicationIntegrationTest extends TestCase
         $providers = $app->getProviders();
         $this->assertArrayNotHasKey(LazyServiceProvider::class, $providers);
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
         # Access the service
         $app->get(LazyService::class);
 
         // Check if correct provider is registered
         $providers = $app->getProviders();
         $this->assertArrayHasKey(LazyServiceProvider::class, $providers);
-
-        # Verify cache is populated
-        $cache = $app->getResolvedServicesCache();
-        $this->assertNotEmpty($cache);
-        $this->assertArrayHasKey(LazyService::class, $cache);
     }
 
     /**
      * @throws Throwable
      */
-    public function test_eagerServicePreloading_wrapsServiceWithCircularDependencyResolver(): void
+    public function test_eagerServicePreloading_resolvesDuringRegister(): void
     {
         $app = new Application();
         $provider = new LazyServiceProvider();
@@ -59,19 +50,16 @@ class LazyLoadingApplicationIntegrationTest extends TestCase
         # Force eager loading
         $provider->defer = false;
 
+        LazyService::$instantiations = 0;
         $app->registerProvider($provider);
         $app->boot();
 
-        # Verify cache is populated before accessing the service
-        $cache = $app->getResolvedServicesCache();
-        $this->assertArrayHasKey(LazyService::class, $cache, 'LazyService should now be in cache after first access');
+        $this->assertSame(1, LazyService::$instantiations, 'An eager provider must resolve its service once, during register().');
 
-        # Access the service
+        # Accessing the already-shared service must not create a second instance
         $app->get(LazyService::class);
 
-        # Verify cache is still populated
-        $cache = $app->getResolvedServicesCache();
-        $this->assertArrayHasKey(LazyService::class, $cache, 'Expected LazyService to be preloaded in cache');
+        $this->assertSame(1, LazyService::$instantiations, 'A shared service already resolved during register() must not be re-instantiated.');
     }
 
     /**
@@ -85,17 +73,12 @@ class LazyLoadingApplicationIntegrationTest extends TestCase
         $app->registerProvider($provider);
         $app->boot();
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertArrayNotHasKey(LazyService::class, $cache, 'LazyService should now be in cache after first access');
+        LazyService::$instantiations = 0;
 
         # Access the service
         $lazyService = $app->get(LazyService::class);
         $this->assertInstanceOf(LazyService::class, $lazyService);
-
-        # Verify cache is populated
-        $cache = $app->getResolvedServicesCache();
-        $this->assertArrayHasKey(LazyService::class, $cache, 'LazyService should now be in cache after first access');
+        $this->assertSame(1, LazyService::$instantiations, 'A deferred service must not be resolved before its first access.');
     }
 
 }
@@ -103,6 +86,13 @@ class LazyLoadingApplicationIntegrationTest extends TestCase
 # dummy classes
 class LazyService
 {
+    public static int $instantiations = 0;
+
+    public function __construct()
+    {
+        self::$instantiations++;
+    }
+
     public function process(): string
     {
         return "LazyService has been loaded and processed!";

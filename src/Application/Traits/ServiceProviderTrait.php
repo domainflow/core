@@ -306,15 +306,7 @@ trait ServiceProviderTrait
             $this->resolveDeferredProvider($id, $this->deferredServices[$id]);
         }
 
-        $value = parent::get($id);
-
-        // domainflow/container no longer caches resolved services as a side
-        // effect of make()/get(); Application still exposes a persistable
-        // resolved-services snapshot, so it must populate it explicitly.
-        // @phpstan-ignore method.deprecated
-        $this->cacheResolvedService($id, $value);
-
-        return $value;
+        return parent::get($id);
     }
 
     /**

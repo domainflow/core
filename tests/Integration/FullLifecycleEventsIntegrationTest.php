@@ -10,7 +10,6 @@ use DomainFlow\Application\Enum\EnvironmentEnum;
 use DomainFlow\Application\Exception\EventManagerException;
 use DomainFlow\Application\Exception\MiddlewareException;
 use DomainFlow\Application\Exception\PathEnvironmentException;
-use DomainFlow\Application\Traits\ResolvedServicesCacheTrait;
 use DomainFlow\Service\AbstractServiceProvider;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use PHPUnit\Framework\TestCase;
@@ -198,36 +197,6 @@ final class FullLifecycleEventsIntegrationTest extends TestCase
             // Confirm 'middleware.error'
             $eventNames = array_map(fn ($e) => $e[0], $spyDispatcher->dispatchedEvents);
             $this->assertContains('middleware.error', $eventNames, "Expected middleware.error event");
-        }
-    }
-
-    /**
-     * @throws EventManagerException|Throwable|PathEnvironmentException
-     */
-    public function test_cacheSavedEvent(): void
-    {
-        $spyDispatcher = new SpyEventDispatcher();
-        $app = new class(__DIR__, $spyDispatcher) extends Application {
-            // Use the trait explicitly or ensure it's used by your Application
-            use ResolvedServicesCacheTrait;
-        };
-        $app->boot();
-
-        // Set an explicit path to ensure the directory is valid
-        $tempCache = __DIR__ . '/test_services.cache';
-        if (file_exists($tempCache)) {
-            unlink($tempCache);
-        }
-        $app->setCachePath($tempCache);
-
-        // Force the app to save the resolved services, triggering 'cache.saved'
-        $app->saveResolvedServicesToFile();
-
-        $eventNames = array_map(fn ($e) => $e[0], $spyDispatcher->dispatchedEvents);
-        $this->assertContains('cache.saved', $eventNames, "Expected cache.saved event");
-
-        if (file_exists($tempCache)) {
-            unlink($tempCache);
         }
     }
 

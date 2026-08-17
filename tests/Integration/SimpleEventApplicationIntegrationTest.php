@@ -25,10 +25,6 @@ class SimpleEventApplicationIntegrationTest extends TestCase
         // Check that application boot process completed successfully
         $this->assertTrue($app->isBooted());
 
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
-
         // Check if default provider is registered
         $providers = $app->getProviders();
         $this->assertArrayHasKey(EventDispatcherServiceProvider::class, $providers);
@@ -51,10 +47,6 @@ class SimpleEventApplicationIntegrationTest extends TestCase
         # listeners are not registered in the container
         $registeredListeners = $app->getByTag('user.registered');
         $this->assertCount(0, $registeredListeners);
-
-        # no cached services (because we didn't use any services)
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
     }
 
     /**
@@ -67,10 +59,6 @@ class SimpleEventApplicationIntegrationTest extends TestCase
 
         // Check that application boot process completed successfully
         $this->assertTrue($app->isBooted());
-
-        # Verify no cached services yet
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
 
         // Check if default provider is registered
         $providers = $app->getProviders();
@@ -111,9 +99,5 @@ class SimpleEventApplicationIntegrationTest extends TestCase
         # listeners are not registered in the container
         $registeredListeners = $app->getByTag('order.created');
         $this->assertCount(0, $registeredListeners);
-
-        # no cached services (because we didn't use any services)
-        $cache = $app->getResolvedServicesCache();
-        $this->assertEmpty($cache);
     }
 }
