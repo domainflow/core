@@ -22,7 +22,7 @@ The **DomainFlow Core** package is a **Lightweight Application Bootstrapper** wi
   Inherits all DI capabilities from [DomainFlow Container](https://www.github.com/domainflow/container), including class auto-wiring, singleton bindings, and contextual bindings.
 
 - **Service Providers**  
-  Register and configure your services, including deferred loading for improved performance (load services only when first requested).
+  Register and configure your services, including deferred loading for improved performance (load services only when first requested). Providers may opt into `OrderedServiceProviderInterface` to guarantee that declared dependencies register and boot before their dependents.
 
 - **Bootstrapping & Lifecycle Management**  
   Built-in support for structured boot phases and graceful termination.
@@ -34,7 +34,7 @@ The **DomainFlow Core** package is a **Lightweight Application Bootstrapper** wi
   Manage environment variables, base paths, and config paths out of the box.
 
 - **Caching**  
-  Optionally persist validated, versioned class-string bindings across processes via `FileContainerCache`, a filesystem-backed adapter for [DomainFlow Container](https://www.github.com/domainflow/container)'s declarative definitions cache (`$app->setExternalCache(new FileContainerCache($path))`). A warm cache hit never skips the boot lifecycle and never re-hydrates a resolved object — only class-string bindings and aliases are restored, and every service is still resolved fresh through the normal container path.
+  Optionally persist validated, versioned class-string bindings across processes via `FileContainerCache`, a filesystem-backed adapter for [DomainFlow Container](https://www.github.com/domainflow/container)'s declarative definitions cache (`$app->setExternalCache(new FileContainerCache($path))`). Tracked definition files use exact mtime plus SHA-256 fingerprints, and a stable lock serializes concurrent cache mutations. A warm cache hit never skips the boot lifecycle and never re-hydrates a resolved object — only class-string bindings and aliases are restored, and every service is still resolved fresh through the normal container path.
 
 ---
 

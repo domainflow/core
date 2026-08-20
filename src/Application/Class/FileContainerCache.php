@@ -26,10 +26,14 @@ use RuntimeException;
  *
  * A caller may opt a key into resource-tracked invalidation via
  * trackResource(): the next set() for that key records the tracked file's
- * mtime alongside the value, and a later get()/has() treats the entry as a
- * miss once any tracked file's mtime has advanced past what was recorded —
- * comparable to Symfony's ConfigCache::isFresh(). A key nothing was tracked
- * for is entirely unaffected and behaves exactly as before.
+ * mtime and content hash alongside the value. A later get()/has() treats the
+ * entry as a miss once either fingerprint component differs. A key nothing
+ * was tracked for is entirely unaffected and behaves exactly as before.
+ *
+ * Mutations hold a stable sidecar-file lock across the complete
+ * read-modify-write cycle, then atomically rename the new payload into place.
+ * Concurrent set/delete operations therefore cannot overwrite each other's
+ * completed changes.
  */
 final class FileContainerCache implements ContainerCacheInterface
 {
@@ -47,9 +51,9 @@ final class FileContainerCache implements ContainerCacheInterface
 
     /**
      * Track a source file for a cache key. The next set() for that key
-     * records the file's current mtime alongside the value; a later
-     * get()/has() for that key treats the entry as a miss once the file's
-     * mtime has advanced past what was recorded, or the file is gone.
+     * records the file's current mtime and content hash alongside the value;
+     * a later get()/has() treats the entry as a miss once either fingerprint
+     * changes or the file is gone.
      *
      * @param string $key
      * @param string $resourceFile
@@ -96,37 +100,44 @@ final class FileContainerCache implements ContainerCacheInterface
         mixed $value,
         int $ttl = 3600
     ): bool {
-        $store = $this->readStore();
-        $entry = [
-            'value' => $value,
-            'expiresAt' => $ttl > 0 ? time() + $ttl : null,
-        ];
-        $resources = $this->currentResourceMtimes($key);
-        if ($resources !== []) {
-            $entry['resources'] = $resources;
-        }
-        $store[$key] = $entry;
-        $this->writeStore($store);
+        $this->withExclusiveLock(function () use ($key, $value, $ttl): void {
+            $store = $this->readStore();
+            $entry = [
+                'value' => $value,
+                'expiresAt' => $ttl > 0 ? time() + $ttl : null,
+            ];
+            $resourceFingerprints = $this->currentResourceFingerprints($key);
+            if ($resourceFingerprints['mtimes'] !== []) {
+                $entry['resources'] = $resourceFingerprints['mtimes'];
+                $entry['resourceHashes'] = $resourceFingerprints['hashes'];
+            }
+            $store[$key] = $entry;
+            $this->writeStore($store);
+        });
 
         return true;
     }
 
     /**
      * @param string $key
-     * @return array<string, int>
+     * @return array{mtimes: array<string, int>, hashes: array<string, string>}
      */
-    private function currentResourceMtimes(
+    private function currentResourceFingerprints(
         string $key
     ): array {
         $mtimes = [];
+        $hashes = [];
         foreach (array_keys($this->trackedResources[$key] ?? []) as $file) {
+            clearstatcache(true, $file);
             $mtime = @filemtime($file);
-            if ($mtime !== false) {
+            $hash = @hash_file('sha256', $file);
+            if ($mtime !== false && $hash !== false) {
                 $mtimes[$file] = $mtime;
+                $hashes[$file] = $hash;
             }
         }
 
-        return $mtimes;
+        return ['mtimes' => $mtimes, 'hashes' => $hashes];
     }
 
     /**
@@ -137,18 +148,24 @@ final class FileContainerCache implements ContainerCacheInterface
     public function delete(
         string $key
     ): bool {
-        $store = $this->readStore();
-        if (!array_key_exists($key, $store)) {
+        if (!is_file($this->filePath)) {
             return true;
         }
 
-        unset($store[$key]);
+        $this->withExclusiveLock(function () use ($key): void {
+            $store = $this->readStore();
+            if (!array_key_exists($key, $store)) {
+                return;
+            }
 
-        if ($store === []) {
-            $this->removeFile();
-        } else {
-            $this->writeStore($store);
-        }
+            unset($store[$key]);
+
+            if ($store === []) {
+                $this->removeFile();
+            } else {
+                $this->writeStore($store);
+            }
+        });
 
         return true;
     }
@@ -170,7 +187,9 @@ final class FileContainerCache implements ContainerCacheInterface
             return ['found' => false, 'value' => null];
         }
 
-        if (isset($entry['resources']) && !$this->resourcesAreFresh($entry['resources'])) {
+        if (isset($entry['resources'])
+            && !$this->resourcesAreFresh($entry['resources'], $entry['resourceHashes'] ?? [])
+        ) {
             return ['found' => false, 'value' => null];
         }
 
@@ -179,15 +198,33 @@ final class FileContainerCache implements ContainerCacheInterface
 
     /**
      * @param array<string, int> $resources
+     * @param array<string, string> $resourceHashes
      */
     private function resourcesAreFresh(
-        array $resources
+        array $resources,
+        array $resourceHashes
     ): bool {
+        // Cache files written by versions that only recorded mtimes cannot
+        // uphold same-mtime content invalidation. Rebuild those tracked
+        // entries once instead of trusting an incomplete fingerprint.
+        if ($resources !== [] && $resourceHashes === []) {
+            return false;
+        }
+
         foreach ($resources as $file => $recordedMtime) {
+            clearstatcache(true, $file);
             $currentMtime = @filemtime($file);
-            if ($currentMtime === false || $currentMtime > $recordedMtime) {
+            if ($currentMtime === false || $currentMtime !== $recordedMtime) {
                 return false;
             }
+
+            if (isset($resourceHashes[$file])) {
+                $currentHash = @hash_file('sha256', $file);
+                if ($currentHash === false || !hash_equals($resourceHashes[$file], $currentHash)) {
+                    return false;
+                }
+            }
+
         }
 
         return true;
@@ -198,7 +235,7 @@ final class FileContainerCache implements ContainerCacheInterface
      * unexpected shape, or format-version mismatch is treated as an empty
      * store — never trusted, never fatal.
      *
-     * @return array<string, array{value: mixed, expiresAt: int|null, resources?: array<string, int>}>
+     * @return array<string, array{value: mixed, expiresAt: int|null, resources?: array<string, int>, resourceHashes?: array<string, string>}>
      */
     private function readStore(): array
     {
@@ -221,7 +258,7 @@ final class FileContainerCache implements ContainerCacheInterface
             return [];
         }
 
-        /** @var array{version: int, entries: array<string, array{value: mixed, expiresAt: int|null, resources?: array<string, int>}>} $decoded */
+        /** @var array{version: int, entries: array<string, array{value: mixed, expiresAt: int|null, resources?: array<string, int>, resourceHashes?: array<string, string>}>} $decoded */
         return $decoded['entries'];
     }
 
@@ -257,7 +294,7 @@ final class FileContainerCache implements ContainerCacheInterface
         mixed $entry
     ): bool {
         if (!is_array($entry)
-            || array_diff(array_keys($entry), ['value', 'expiresAt', 'resources']) !== []
+            || array_diff(array_keys($entry), ['value', 'expiresAt', 'resources', 'resourceHashes']) !== []
             || !array_key_exists('value', $entry)
             || !array_key_exists('expiresAt', $entry)
             || !(is_int($entry['expiresAt']) || $entry['expiresAt'] === null)
@@ -269,7 +306,16 @@ final class FileContainerCache implements ContainerCacheInterface
             return count($entry) === 2;
         }
 
-        return count($entry) === 3 && $this->isValidResources($entry['resources']);
+        if (!$this->isValidResources($entry['resources'])) {
+            return false;
+        }
+
+        if (!array_key_exists('resourceHashes', $entry)) {
+            return count($entry) === 3;
+        }
+
+        return count($entry) === 4
+            && $this->isValidResourceHashes($entry['resourceHashes'], $entry['resources']);
     }
 
     /**
@@ -292,12 +338,71 @@ final class FileContainerCache implements ContainerCacheInterface
     }
 
     /**
-     * @param array<string, array{value: mixed, expiresAt: int|null, resources?: array<string, int>}> $store
-     * @throws CacheException
+     * @param mixed $resourceHashes
+     * @param mixed $resources
+     * @return bool
      */
-    private function writeStore(
-        array $store
+    private function isValidResourceHashes(
+        mixed $resourceHashes,
+        mixed $resources
+    ): bool {
+        if (!is_array($resourceHashes)
+            || !is_array($resources)
+            || array_keys($resourceHashes) !== array_keys($resources)
+        ) {
+            return false;
+        }
+
+        foreach ($resourceHashes as $file => $hash) {
+            if (!is_string($file) || !is_string($hash) || strlen($hash) !== 64 || !ctype_xdigit($hash)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Execute a complete cache mutation while holding one stable lock.
+     *
+     * @param callable():void $operation
+     * @throws CacheException
+     * @return void
+     */
+    private function withExclusiveLock(
+        callable $operation
     ): void {
+        $this->ensureCacheDirectoryExists();
+        $lockPath = $this->filePath . '.lock';
+        $lock = @fopen($lockPath, 'c+b');
+        if ($lock === false) {
+            throw CacheException::forUnknownError("Failed to open cache lock: $lockPath");
+        }
+
+        try {
+            if (!@chmod($lockPath, 0600)) {
+                throw CacheException::forUnknownError("Failed to secure cache lock permissions: $lockPath");
+            }
+            if (!flock($lock, LOCK_EX)) {
+                throw CacheException::forUnknownError("Failed to acquire cache lock: $lockPath");
+            }
+
+            try {
+                $operation();
+            } finally {
+                flock($lock, LOCK_UN);
+            }
+        } finally {
+            fclose($lock);
+        }
+    }
+
+    /**
+     * @throws CacheException
+     * @return void
+     */
+    private function ensureCacheDirectoryExists(): void
+    {
         $dir = dirname($this->filePath);
         if (!is_dir($dir)) {
             if (!mkdir($dir, 0755, true) && !is_dir($dir)) {
@@ -305,6 +410,16 @@ final class FileContainerCache implements ContainerCacheInterface
             }
             chmod($dir, 0755);
         }
+    }
+
+    /**
+     * @param array<string, array{value: mixed, expiresAt: int|null, resources?: array<string, int>, resourceHashes?: array<string, string>}> $store
+     * @throws CacheException
+     */
+    private function writeStore(
+        array $store
+    ): void {
+        $this->ensureCacheDirectoryExists();
 
         try {
             $encoded = json_encode([

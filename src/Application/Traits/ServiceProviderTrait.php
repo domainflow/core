@@ -38,6 +38,18 @@ trait ServiceProviderTrait
     protected array $serviceProviders = [];
 
     /**
+     * Eager providers accepted by registerProvider(), in call order.
+     *
+     * Ordered providers registered before boot are kept here without
+     * invoking register() until the complete dependency graph is known.
+     * Non-ordered providers continue to register immediately, preserving
+     * the existing public lifecycle for providers that do not opt in.
+     *
+     * @var array<string, ServiceProviderInterface>
+     */
+    protected array $providerCandidates = [];
+
+    /**
      * Deferred services mapping.
      *
      * Format: [ service key => provider class name ]
@@ -91,8 +103,12 @@ trait ServiceProviderTrait
      * Register a service provider with the application.
      *
      * A given provider class is registered at most once. An eager provider
-     * registers immediately; a deferred provider only registers once one of
-     * its provided service identifiers is first requested through get().
+     * registers immediately unless it opts into dependency ordering before
+     * boot(); ordered providers register during the topologically sorted
+     * boot pass. A deferred provider only registers once one of its provided
+     * service identifiers is first requested through get(). After boot, an
+     * ordered provider registers and boots immediately only when all declared
+     * dependencies remain registered and booted.
      *
      * A deferred provider's provided identifiers (class, interface, or plain
      * string) must each be claimed by exactly one provider class. Claiming
@@ -112,7 +128,7 @@ trait ServiceProviderTrait
         $class = get_class($provider);
 
         // Prevent duplicate registrations
-        if (isset($this->serviceProviders[$class])) {
+        if (isset($this->serviceProviders[$class]) || isset($this->providerCandidates[$class])) {
             return;
         }
 
@@ -144,10 +160,56 @@ trait ServiceProviderTrait
             return;
         }
 
-        $this->registerProviderOnce($provider);
+        $this->providerCandidates[$class] = $provider;
+
+        if ($provider instanceof OrderedServiceProviderInterface && !$this->booted) {
+            return;
+        }
 
         if ($this->booted) {
-            $this->bootProviderOnce($provider);
+            try {
+                $this->assertProviderDependenciesAreBooted($provider);
+                $this->registerProviderOnce($provider);
+                $this->bootProviderOnce($provider);
+            } catch (Throwable $exception) {
+                if (!isset($this->serviceProviders[$class])) {
+                    unset($this->providerCandidates[$class]);
+                }
+
+                throw $exception;
+            }
+
+            return;
+        }
+
+        try {
+            $this->registerProviderOnce($provider);
+        } catch (Throwable $exception) {
+            unset($this->providerCandidates[$class]);
+
+            throw $exception;
+        }
+    }
+
+    /**
+     * Ensure a late ordered provider only runs after its declared dependencies.
+     *
+     * @throws BootstrappingException
+     */
+    private function assertProviderDependenciesAreBooted(
+        ServiceProviderInterface $provider
+    ): void {
+        if (!($provider instanceof OrderedServiceProviderInterface)) {
+            return;
+        }
+
+        $providerClass = get_class($provider);
+        foreach ($provider->dependsOn() as $dependencyClass) {
+            if (!isset($this->serviceProviders[$dependencyClass])
+                || !isset($this->bootedProviders[$dependencyClass])
+            ) {
+                throw BootstrappingException::forUnknownProviderDependency($providerClass, $dependencyClass);
+            }
         }
     }
 
@@ -167,6 +229,7 @@ trait ServiceProviderTrait
     ): void {
         unset(
             $this->serviceProviders[$providerClass],
+            $this->providerCandidates[$providerClass],
             $this->bootedProviders[$providerClass],
             $this->deferredProviderInstances[$providerClass]
         );
@@ -249,9 +312,12 @@ trait ServiceProviderTrait
      */
     protected function orderProvidersForBootstrapping(): array
     {
-        $byClass = [];
+        $byClass = $this->providerCandidates;
         foreach ($this->serviceProviders as $provider) {
-            $byClass[get_class($provider)] = $provider;
+            $class = get_class($provider);
+            if (!isset($byClass[$class])) {
+                $byClass[$class] = $provider;
+            }
         }
 
         $ordered = [];

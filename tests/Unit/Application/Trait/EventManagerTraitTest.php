@@ -222,6 +222,48 @@ final class EventManagerTraitTest extends TestCase
         $this->assertTrue($app->hasListeners('existent.event'));
     }
 
+    public function test_hasListeners_includes_wildcard_listeners_used_by_dispatch(): void
+    {
+        $dispatcher = new BasicEventDispatcher();
+        $global = static function (): void {
+        };
+        $orders = static function (): void {
+        };
+        $dispatcher->on('orders.*', $orders);
+
+        $this->assertTrue($dispatcher->hasListeners('orders.created'));
+        $this->assertFalse($dispatcher->hasListeners('users.deleted'));
+
+        $dispatcher->off('orders.*', $orders);
+        $this->assertFalse($dispatcher->hasListeners('orders.created'));
+
+        $dispatcher->on('*', $global);
+        $this->assertTrue($dispatcher->hasListeners('users.deleted'));
+
+        $dispatcher->off('*', $global);
+        $this->assertFalse($dispatcher->hasListeners('users.deleted'));
+    }
+
+    public function test_error_listener_failure_does_not_mask_the_original_dispatch_exception(): void
+    {
+        $dispatcher = new BasicEventDispatcher();
+        $app = new Application(eventDispatcher: $dispatcher);
+        $original = new Exception('original listener failure');
+        $dispatcher->on('business.event', static function () use ($original): never {
+            throw $original;
+        });
+        $dispatcher->on('event_manager.dispatch.error', static function (): never {
+            throw new Exception('secondary error listener failure');
+        });
+
+        try {
+            $app->fireEvent('business.event');
+            $this->fail('The original listener failure must be wrapped.');
+        } catch (EventManagerException $exception) {
+            $this->assertSame($original, $exception->getPrevious());
+        }
+    }
+
     /**
      * @throws EventManagerException|PathEnvironmentException
      */

@@ -371,6 +371,64 @@ final class ServiceDefinitionLoaderTraitTest extends TestCase
         $app->exposeProcessServiceDefinition('TestService', $definition);
     }
 
+    public function test_processServiceDefinitionRejectsNonArrayTags(): void
+    {
+        $app = new TestableServiceDefinitionLoaderApplication();
+
+        $this->expectException(ServiceDefinitionLoaderException::class);
+        $this->expectExceptionMessage('The tags definition for service TestService must be an array.');
+        $app->exposeProcessServiceDefinition('TestService', [
+            'concrete' => 'stdClass',
+            'tags' => 'not-an-array',
+        ]);
+    }
+
+    public function test_invalid_tag_does_not_leave_a_partial_service_binding(): void
+    {
+        $app = new TestableServiceDefinitionLoaderApplication();
+
+        try {
+            $app->exposeProcessServiceDefinition('audit.invalid-tag', [
+                'concrete' => 'stdClass',
+                'tags' => ['valid-before-failure', 123],
+            ]);
+            $this->fail('An invalid tag must reject the definition.');
+        } catch (ServiceDefinitionLoaderException) {
+            $this->assertFalse($app->has('audit.invalid-tag'));
+            $this->assertArrayNotHasKey('audit.invalid-tag', $app->getByTag('valid-before-failure'));
+        }
+    }
+
+    public function test_present_non_callable_factory_is_rejected_instead_of_ignored(): void
+    {
+        $app = new TestableServiceDefinitionLoaderApplication();
+
+        $this->expectException(ServiceDefinitionLoaderException::class);
+        $app->exposeProcessServiceDefinition('audit.invalid-factory', [
+            'factory' => 'this function does not exist',
+            'concrete' => 'stdClass',
+        ]);
+    }
+
+    public function test_explicit_null_factory_is_rejected_without_falling_back_to_concrete(): void
+    {
+        $app = new TestableServiceDefinitionLoaderApplication();
+
+        try {
+            $app->exposeProcessServiceDefinition('audit.null-factory', [
+                'factory' => null,
+                'concrete' => 'stdClass',
+            ]);
+            $this->fail('An explicit null factory must reject the definition.');
+        } catch (ServiceDefinitionLoaderException $exception) {
+            $this->assertStringContainsString(
+                'The factory definition for service audit.null-factory must be callable.',
+                $exception->getMessage()
+            );
+            $this->assertFalse($app->has('audit.null-factory'));
+        }
+    }
+
     /**
      * @throws EventManagerException
      * @throws ServiceDefinitionLoaderException

@@ -120,7 +120,12 @@ trait EventManagerTrait
         } catch (Throwable $e) {
             // Avoid recursive errors if the error event itself fails.
             if ($event !== self::EVENT_EVENT_MANAGER_DISPATCH_ERROR_KEY) {
-                $this->eventDispatcher->dispatch(self::EVENT_EVENT_MANAGER_DISPATCH_ERROR_KEY, $event, $e);
+                try {
+                    $this->eventDispatcher->dispatch(self::EVENT_EVENT_MANAGER_DISPATCH_ERROR_KEY, $event, $e);
+                } catch (Throwable) {
+                    // Diagnostic listeners must never replace the primary
+                    // dispatch failure seen by the caller.
+                }
             }
             throw EventManagerException::forDispatchFailure($event, $e);
         }

@@ -232,6 +232,15 @@ final class FileContainerCacheTest extends TestCase
         $this->assertTrue($cache->delete('missing'));
     }
 
+    public function test_delete_missing_key_preserves_an_existing_store(): void
+    {
+        $cache = new FileContainerCache($this->file);
+        $cache->set('existing', ['a' => 1], 0);
+
+        $this->assertTrue($cache->delete('missing'));
+        $this->assertSame(['a' => 1], $cache->get('existing'));
+    }
+
     /**
      * @throws CacheException
      */
@@ -273,24 +282,72 @@ final class FileContainerCacheTest extends TestCase
         $cache->set('key1', ['a' => 1], 0);
     }
 
+    public function test_set_lock_acquisition_failure_throws(): void
+    {
+        $scheme = 'domainflowlockfail';
+        $this->assertTrue(stream_wrapper_register($scheme, LockFailureStreamWrapper::class));
+
+        try {
+            $cache = new FileContainerCache($scheme . '://cache/definitions.cache');
+
+            $this->expectException(CacheException::class);
+            $this->expectExceptionMessage('Failed to acquire cache lock');
+            $cache->set('key1', ['a' => 1], 0);
+        } finally {
+            stream_wrapper_unregister($scheme);
+        }
+    }
+
+    public function test_set_lock_open_failure_throws(): void
+    {
+        $scheme = 'domainflowlockopenfail';
+        $this->assertTrue(stream_wrapper_register($scheme, LockOpenFailureStreamWrapper::class));
+
+        try {
+            $cache = new FileContainerCache($scheme . '://cache/definitions.cache');
+
+            $this->expectException(CacheException::class);
+            $this->expectExceptionMessage('Failed to open cache lock');
+            $cache->set('key1', ['a' => 1], 0);
+        } finally {
+            stream_wrapper_unregister($scheme);
+        }
+    }
+
+    public function test_set_lock_permission_failure_throws(): void
+    {
+        $scheme = 'domainflowlockpermissionfail';
+        $this->assertTrue(stream_wrapper_register($scheme, LockPermissionFailureStreamWrapper::class));
+
+        try {
+            $cache = new FileContainerCache($scheme . '://cache/definitions.cache');
+
+            $this->expectException(CacheException::class);
+            $this->expectExceptionMessage('Failed to secure cache lock');
+            $cache->set('key1', ['a' => 1], 0);
+        } finally {
+            stream_wrapper_unregister($scheme);
+        }
+    }
+
     /**
      * @throws CacheException
      */
     public function test_delete_unlink_failure_throws(): void
     {
-        $root = vfsStream::setup('root', 0555);
-        vfsStream::newFile('definitions.cache')
-            ->withContent(json_encode([
-                'version' => 1,
-                'entries' => ['key1' => ['value' => ['a' => 1], 'expiresAt' => null]],
-            ]))
-            ->at($root);
-        $file = vfsStream::url('root/definitions.cache');
+        $cache = new FileContainerCache($this->file);
+        $cache->set('key1', ['a' => 1], 0);
+        $cacheDirectory = dirname($this->file);
+        chmod($cacheDirectory, 0555);
 
-        $cache = new FileContainerCache($file);
-
-        $this->expectException(CacheException::class);
-        $cache->delete('key1');
+        try {
+            $cache->delete('key1');
+            $this->fail('Deleting the final entry from an unwritable cache directory must fail.');
+        } catch (CacheException $exception) {
+            $this->assertStringContainsString('Failed to delete cache file', $exception->getMessage());
+        } finally {
+            chmod($cacheDirectory, 0755);
+        }
     }
 
     /**
@@ -386,6 +443,29 @@ final class FileContainerCacheTest extends TestCase
         $this->assertSame(['a' => 1], $cache->get('key1'));
     }
 
+    public function test_legacy_tracked_entry_without_content_hash_is_rebuilt_safely(): void
+    {
+        $resourceFile = $this->tempDir . DIRECTORY_SEPARATOR . 'services.yaml';
+        mkdir(dirname($this->file), 0755, true);
+        file_put_contents($resourceFile, 'unchanged');
+        $mtime = (int) filemtime($resourceFile);
+        file_put_contents($this->file, json_encode([
+            'version' => 1,
+            'entries' => [
+                'key1' => [
+                    'value' => ['a' => 1],
+                    'expiresAt' => null,
+                    'resources' => [$resourceFile => $mtime],
+                ],
+            ],
+        ]));
+
+        $cache = new FileContainerCache($this->file);
+
+        $this->assertFalse($cache->has('key1'));
+        $this->assertNull($cache->get('key1'));
+    }
+
     /**
      * @throws CacheException
      */
@@ -404,6 +484,148 @@ final class FileContainerCacheTest extends TestCase
 
         $this->assertFalse($cache->has('key1'));
         $this->assertNull($cache->get('key1'));
+    }
+
+    public function test_tracked_resource_changed_with_same_mtime_is_treated_as_a_miss(): void
+    {
+        $resourceFile = $this->tempDir . DIRECTORY_SEPARATOR . 'services.yaml';
+        mkdir($this->tempDir, 0755, true);
+        $recordedMtime = time() - 100;
+        file_put_contents($resourceFile, 'original');
+        touch($resourceFile, $recordedMtime);
+
+        $cache = new FileContainerCache($this->file);
+        $cache->trackResource('key1', $resourceFile);
+        $cache->set('key1', ['a' => 1], 0);
+
+        file_put_contents($resourceFile, 'changed content');
+        touch($resourceFile, $recordedMtime);
+        clearstatcache(true, $resourceFile);
+
+        $this->assertFalse($cache->has('key1'));
+    }
+
+    public function test_tracked_resource_changed_to_an_older_mtime_is_treated_as_a_miss(): void
+    {
+        $resourceFile = $this->tempDir . DIRECTORY_SEPARATOR . 'services.yaml';
+        mkdir($this->tempDir, 0755, true);
+        $recordedMtime = time() - 100;
+        file_put_contents($resourceFile, 'original');
+        touch($resourceFile, $recordedMtime);
+
+        $cache = new FileContainerCache($this->file);
+        $cache->trackResource('key1', $resourceFile);
+        $cache->set('key1', ['a' => 1], 0);
+
+        file_put_contents($resourceFile, 'restored backup');
+        touch($resourceFile, $recordedMtime - 100);
+        clearstatcache(true, $resourceFile);
+
+        $this->assertFalse($cache->has('key1'));
+    }
+
+    public function test_parallel_writers_do_not_lose_independent_cache_entries(): void
+    {
+        if (!function_exists('proc_open')) {
+            $this->markTestSkipped('This regression test requires process support.');
+        }
+
+        $cache = new FileContainerCache($this->file);
+        $cache->set('seed', str_repeat('x', 2_000_000), 0);
+        $barrier = $this->tempDir . DIRECTORY_SEPARATOR . 'start-workers';
+        $autoload = dirname(__DIR__, 4) . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
+        $worker = <<<'PHP'
+            require $argv[1];
+            while (!is_file($argv[3])) {
+                usleep(1000);
+            }
+            (new \DomainFlow\Application\Class\FileContainerCache($argv[2]))->set($argv[4], $argv[4], 0);
+            PHP;
+        $processes = [];
+
+        for ($i = 0; $i < 8; ++$i) {
+            $pipes = [];
+            $process = proc_open(
+                [PHP_BINARY, '-r', $worker, $autoload, $this->file, $barrier, 'worker-' . $i],
+                [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+                $pipes
+            );
+            $this->assertIsResource($process);
+            fclose($pipes[0]);
+            $processes[] = [$process, $pipes];
+        }
+
+        touch($barrier);
+
+        foreach ($processes as [$process, $pipes]) {
+            $stdout = stream_get_contents($pipes[1]);
+            $stderr = stream_get_contents($pipes[2]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            $this->assertSame(0, proc_close($process), $stdout . $stderr);
+        }
+
+        for ($i = 0; $i < 8; ++$i) {
+            $this->assertTrue($cache->has('worker-' . $i), 'A concurrent cache write was lost.');
+        }
+    }
+
+    public function test_parallel_set_and_delete_mutations_preserve_every_completed_operation(): void
+    {
+        if (!function_exists('proc_open')) {
+            $this->markTestSkipped('This regression test requires process support.');
+        }
+
+        $cache = new FileContainerCache($this->file);
+        $cache->set('seed', str_repeat('x', 2_000_000), 0);
+        for ($i = 0; $i < 4; ++$i) {
+            $cache->set('delete-' . $i, 'present', 0);
+        }
+
+        $barrier = $this->tempDir . DIRECTORY_SEPARATOR . 'start-mutation-workers';
+        $autoload = dirname(__DIR__, 4) . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
+        $worker = <<<'PHP'
+            require $argv[1];
+            while (!is_file($argv[3])) {
+                usleep(1000);
+            }
+            $cache = new \DomainFlow\Application\Class\FileContainerCache($argv[2]);
+            if ($argv[4] === 'set') {
+                $cache->set($argv[5], $argv[5], 0);
+            } else {
+                $cache->delete($argv[5]);
+            }
+            PHP;
+        $processes = [];
+
+        for ($i = 0; $i < 4; ++$i) {
+            foreach ([['set', 'set-' . $i], ['delete', 'delete-' . $i]] as [$operation, $key]) {
+                $pipes = [];
+                $process = proc_open(
+                    [PHP_BINARY, '-r', $worker, $autoload, $this->file, $barrier, $operation, $key],
+                    [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+                    $pipes
+                );
+                $this->assertIsResource($process);
+                fclose($pipes[0]);
+                $processes[] = [$process, $pipes];
+            }
+        }
+
+        touch($barrier);
+
+        foreach ($processes as [$process, $pipes]) {
+            $stdout = stream_get_contents($pipes[1]);
+            $stderr = stream_get_contents($pipes[2]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            $this->assertSame(0, proc_close($process), $stdout . $stderr);
+        }
+
+        for ($i = 0; $i < 4; ++$i) {
+            $this->assertTrue($cache->has('set-' . $i), 'A concurrent set operation was lost.');
+            $this->assertFalse($cache->has('delete-' . $i), 'A concurrent delete operation was lost.');
+        }
     }
 
     /**
@@ -527,5 +749,124 @@ final class FileContainerCacheTest extends TestCase
         $cache = new FileContainerCache($this->file);
 
         $this->assertFalse($cache->has('key1'));
+    }
+
+    public function test_entry_with_mismatched_resource_hash_keys_is_treated_as_a_miss(): void
+    {
+        mkdir(dirname($this->file), 0777, true);
+        file_put_contents($this->file, json_encode([
+            'version' => 1,
+            'entries' => [
+                'key1' => [
+                    'value' => ['a' => 1],
+                    'expiresAt' => null,
+                    'resources' => ['/tmp/resource' => 123],
+                    'resourceHashes' => [],
+                ],
+            ],
+        ]));
+
+        $this->assertFalse((new FileContainerCache($this->file))->has('key1'));
+    }
+
+    public function test_entry_with_invalid_resource_hash_is_treated_as_a_miss(): void
+    {
+        mkdir(dirname($this->file), 0777, true);
+        file_put_contents($this->file, json_encode([
+            'version' => 1,
+            'entries' => [
+                'key1' => [
+                    'value' => ['a' => 1],
+                    'expiresAt' => null,
+                    'resources' => ['/tmp/resource' => 123],
+                    'resourceHashes' => ['/tmp/resource' => 'not-a-sha256-hash'],
+                ],
+            ],
+        ]));
+
+        $this->assertFalse((new FileContainerCache($this->file))->has('key1'));
+    }
+}
+
+final class LockFailureStreamWrapper
+{
+    /** @var resource|null */
+    public mixed $context;
+
+    public function stream_open(
+        string $path,
+        string $mode,
+        int $options,
+        ?string &$openedPath
+    ): bool {
+        return true;
+    }
+
+    public function stream_lock(int $operation): bool
+    {
+        return false;
+    }
+
+    public function stream_metadata(string $path, int $option, mixed $value): bool
+    {
+        return true;
+    }
+
+    /** @return array{mode: int} */
+    public function url_stat(string $path, int $flags): array
+    {
+        return ['mode' => 0040777];
+    }
+}
+
+final class LockOpenFailureStreamWrapper
+{
+    /** @var resource|null */
+    public mixed $context;
+
+    public function stream_open(
+        string $path,
+        string $mode,
+        int $options,
+        ?string &$openedPath
+    ): bool {
+        return false;
+    }
+
+    /** @return array{mode: int} */
+    public function url_stat(string $path, int $flags): array
+    {
+        return ['mode' => 0040777];
+    }
+}
+
+final class LockPermissionFailureStreamWrapper
+{
+    /** @var resource|null */
+    public mixed $context;
+
+    public function stream_open(
+        string $path,
+        string $mode,
+        int $options,
+        ?string &$openedPath
+    ): bool {
+        return true;
+    }
+
+    public function stream_lock(int $operation): bool
+    {
+        return true;
+    }
+
+    public function stream_metadata(string $path, int $option, mixed $value): bool
+    {
+        return false;
+    }
+
+    /** @return array{mode: int} */
+    public function url_stat(string $path, int $flags): array
+    {
+        return ['mode' => 0040777];
     }
 }
