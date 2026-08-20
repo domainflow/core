@@ -121,16 +121,16 @@ class ServiceCachingApplicationIntegrationTest extends TestCase
         $app = new Application(__DIR__);
         $app->setExternalCache(new FileContainerCache($this->cacheFile));
 
-        $this->assertFalse($app->has(CachedService::class), 'A corrupt or tampered cache file must never be trusted.');
+        $this->assertFalse($app->has(UncachedServiceContract::class), 'A corrupt or tampered cache file must never be trusted.');
 
         // The application still boots and resolves normally after an
         // explicit bind(), proving the corrupt cache did not hide or break
         // valid application state.
-        $app->bind(CachedService::class, CachedService::class, false);
+        $app->bind(UncachedServiceContract::class, CachedService::class, false);
         $app->boot();
 
         $this->assertTrue($app->isBooted());
-        $this->assertInstanceOf(CachedService::class, $app->get(CachedService::class));
+        $this->assertInstanceOf(CachedService::class, $app->get(UncachedServiceContract::class));
     }
 
     /**
@@ -193,7 +193,11 @@ class ServiceCachingApplicationIntegrationTest extends TestCase
 }
 
 # Dummy classes
-class CachedService
+interface UncachedServiceContract
+{
+}
+
+class CachedService implements UncachedServiceContract
 {
     public static int $instantiations = 0;
 

@@ -103,6 +103,45 @@ final class ServiceProviderTraitTest extends TestCase
         $this->assertTrue($provider->bootedCalled);
     }
 
+    public function test_eagerProviderRegistrationFailureBeforeBootIsRetryable(): void
+    {
+        ThrowingEagerProvider::$shouldThrow = true;
+        $app = new Application();
+        $provider = new ThrowingEagerProvider();
+
+        try {
+            $app->registerProvider($provider);
+            $this->fail('Expected the provider registration to fail.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Simulated eager provider registration failure', $exception->getMessage());
+        }
+
+        ThrowingEagerProvider::$shouldThrow = false;
+        $app->registerProvider($provider);
+
+        $this->assertTrue($app->hasProvider(ThrowingEagerProvider::class));
+    }
+
+    public function test_eagerProviderRegistrationFailureAfterBootIsRetryable(): void
+    {
+        ThrowingEagerProvider::$shouldThrow = true;
+        $app = new Application();
+        $app->boot();
+        $provider = new ThrowingEagerProvider();
+
+        try {
+            $app->registerProvider($provider);
+            $this->fail('Expected the provider registration to fail.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Simulated eager provider registration failure', $exception->getMessage());
+        }
+
+        ThrowingEagerProvider::$shouldThrow = false;
+        $app->registerProvider($provider);
+
+        $this->assertTrue($app->hasProvider(ThrowingEagerProvider::class));
+    }
+
     /**
      * @throws Throwable
      */
@@ -456,11 +495,9 @@ final class ServiceProviderTraitTest extends TestCase
             static fn (string $entry): bool => str_ends_with($entry, '::register')
         ));
         $this->assertSame(
-            [OrderedProviderB::class . '::register', OrderedProviderA::class . '::register'],
+            [OrderedProviderA::class . '::register', OrderedProviderB::class . '::register'],
             $registerLog,
-            'register() runs immediately at registerProvider() call time, in call order — declared '
-            . 'ordering only reorders boot(), which has not run yet at that point. This is intentional '
-            . 'and documented in docs/ARCHITECTURE.md.'
+            'The ordered-provider contract requires dependencies to register first, even when providers are supplied in reverse order.'
         );
 
         $bootLog = array_values(array_filter(
@@ -472,6 +509,58 @@ final class ServiceProviderTraitTest extends TestCase
             $bootLog,
             'boot() must respect the declared dependency: A (the dependency) boots before B (the dependent), regardless of registration order.'
         );
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_registeringAnIndependentProviderAfterBootDoesNotRevalidateRemovedHistoricalDependencies(): void
+    {
+        OrderedProviderLog::reset();
+        DummyOrderProviderFirst::$bootOrder = [];
+        $app = new Application();
+        $app->registerProvider(new OrderedProviderB());
+        $app->registerProvider(new OrderedProviderA());
+        $app->boot();
+        $app->unregisterProvider(OrderedProviderA::class);
+
+        $app->registerProvider(new DummyOrderProviderFirst());
+
+        $this->assertTrue($app->hasProvider(DummyOrderProviderFirst::class));
+        $this->assertSame([DummyOrderProviderFirst::class], DummyOrderProviderFirst::$bootOrder);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_orderedProviderRegisteredAfterBootRequiresItsDependenciesToRemainAvailable(): void
+    {
+        $app = new Application();
+        $app->boot();
+
+        $this->expectException(BootstrappingException::class);
+        $this->expectExceptionMessage(OrderedProviderA::class);
+
+        $app->registerProvider(new OrderedProviderB());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function test_orderedProviderRegisteredAfterBootRunsWhenItsDependenciesAreBooted(): void
+    {
+        OrderedProviderLog::reset();
+        $app = new Application();
+        $app->registerProvider(new OrderedProviderA());
+        $app->boot();
+        OrderedProviderLog::reset();
+
+        $app->registerProvider(new OrderedProviderB());
+
+        $this->assertSame([
+            OrderedProviderB::class . '::register',
+            OrderedProviderB::class . '::boot',
+        ], OrderedProviderLog::$log);
     }
 
     /**
@@ -843,6 +932,20 @@ class CountingDeferredService
 
 class ThrowingDeferredService
 {
+}
+
+class ThrowingEagerProvider extends DummyProvider
+{
+    public static bool $shouldThrow = true;
+
+    public function register(Application $app): void
+    {
+        if (self::$shouldThrow) {
+            throw new RuntimeException('Simulated eager provider registration failure');
+        }
+
+        parent::register($app);
+    }
 }
 
 class ThrowingDeferredProvider extends AbstractServiceProvider
