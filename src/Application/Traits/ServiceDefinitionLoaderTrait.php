@@ -94,9 +94,9 @@ trait ServiceDefinitionLoaderTrait
      *
      * A FileContainerCache set via setExternalCache() tracks $file as a
      * resource for the container's declarative-definitions cache entry: a
-     * later cache read self-invalidates once $file's mtime advances past
-     * what was recorded when this call last persisted it, so a changed
-     * service-definition file is never served from a stale cache.
+     * later cache read self-invalidates when $file disappears, its mtime
+     * changes in either direction, or its SHA-256 content hash changes, so a
+     * changed service-definition file is never served from a stale cache.
      *
      * @param string $file
      * @throws RuntimeException
@@ -177,29 +177,41 @@ trait ServiceDefinitionLoaderTrait
         array $definition
     ): void {
         try {
-            if (isset($definition['factory']) && is_callable($definition['factory'])) {
-                // Ensure the factory is a Closure.
+            $factory = null;
+            $concrete = null;
+            if (array_key_exists('factory', $definition)) {
+                if (!is_callable($definition['factory'])) {
+                    throw new RuntimeException("The factory definition for service {$abstract} must be callable.");
+                }
+
                 $factory = $definition['factory'] instanceof Closure
                     ? $definition['factory']
                     : Closure::fromCallable($definition['factory']);
-                $shared = isset($definition['shared']) && (bool) $definition['shared'];
-                $this->bind($abstract, $factory, $shared);
             } else {
                 $concrete = $definition['concrete'] ?? $abstract;
-                $shared = isset($definition['shared']) && (bool) $definition['shared'];
                 if (!is_string($concrete) && !($concrete instanceof Closure)) {
                     throw new RuntimeException("The concrete definition for service {$abstract} must be a string or Closure.");
                 }
-                $this->bind($abstract, $concrete, $shared);
             }
 
-            if (isset($definition['tags']) && is_array($definition['tags'])) {
+            $tags = [];
+            if (array_key_exists('tags', $definition)) {
+                if (!is_array($definition['tags'])) {
+                    throw new RuntimeException("The tags definition for service {$abstract} must be an array.");
+                }
+
                 foreach ($definition['tags'] as $tag) {
                     if (!is_string($tag)) {
                         throw new RuntimeException("Invalid tag type for service {$abstract}. Tag must be a string.");
                     }
-                    $this->tag($tag, [$abstract]);
+                    $tags[] = $tag;
                 }
+            }
+
+            $shared = isset($definition['shared']) && (bool) $definition['shared'];
+            $this->bind($abstract, $factory ?? $concrete, $shared);
+            foreach ($tags as $tag) {
+                $this->tag($tag, [$abstract]);
             }
             $this->fireEvent(self::EVENT_SERVICE_DEFINITION_BOUND_KEY, $abstract);
         } catch (Throwable $e) {

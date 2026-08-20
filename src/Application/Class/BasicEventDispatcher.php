@@ -94,7 +94,7 @@ class BasicEventDispatcher implements EventDispatcherInterface
         }
 
         foreach ($this->listeners as $key => $listeners) {
-            if (str_contains($key, '*') && fnmatch($key, $event)) {
+            if ($this->eventMatchesPattern($key, $event)) {
                 foreach ($listeners as $listener) {
                     if ($key === '*') {
                         $listener($event, ...$args);
@@ -115,8 +115,28 @@ class BasicEventDispatcher implements EventDispatcherInterface
     public function hasListeners(
         string $event
     ): bool {
-        return isset($this->listeners[$event])
-            && count($this->listeners[$event])
-            > 0;
+        foreach ($this->listeners as $registeredEvent => $listeners) {
+            if ($listeners !== []
+                && ($registeredEvent === $event || $this->eventMatchesPattern($registeredEvent, $event))
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Determine whether a wildcard listener key matches a dispatched event.
+     *
+     * @param string $registeredEvent
+     * @param string $event
+     * @return bool
+     */
+    private function eventMatchesPattern(
+        string $registeredEvent,
+        string $event
+    ): bool {
+        return str_contains($registeredEvent, '*') && fnmatch($registeredEvent, $event);
     }
 }

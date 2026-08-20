@@ -140,7 +140,7 @@ class DummyServiceWithAttribute
 {
 }
 
-class DummyServiceWithoutAttribute
+abstract class DummyServiceWithoutAttribute
 {
 }
 
