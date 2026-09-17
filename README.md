@@ -19,7 +19,7 @@ The **DomainFlow Core** package is a **Lightweight Application Bootstrapper** wi
 ## ✨ Core Functionality
 
 - **Application Container**  
-  Inherits all DI capabilities from [DomainFlow Container](https://www.github.com/domainflow/container), including class auto-wiring, singleton bindings, and contextual bindings.
+  Inherits all DI capabilities from [DomainFlow Container](https://www.github.com/domainflow/container), including class auto-wiring, singleton bindings, contextual bindings, and side-effect-free explicit-registration inspection through `hasExplicitRegistration()`.
 
 - **Service Providers**  
   Register and configure your services, including deferred loading for improved performance (load services only when first requested). Providers may opt into `OrderedServiceProviderInterface` to guarantee that declared dependencies register and boot before their dependents.
